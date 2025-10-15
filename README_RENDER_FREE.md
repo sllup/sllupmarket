@@ -1,29 +1,26 @@
-# Deploy no Render (Free)
+# Deploy no Render (Free) – Build do dbt manual via Web Service
 
-## Passo 1) Banco
-Crie um Postgres (pode ser Render Free ou Supabase). Copie a `DATABASE_URL`.
-Rode o DDL localmente ou num admin (pode ser via container psql) usando:
-```
-psql "$DATABASE_URL" -f sql/ddl.sql
-```
+## Serviços criados pelo `render.yaml`
+- **engajamento-api**: FastAPI (dados/insights)
+- **engajamento-dashboard**: Streamlit
+- **dbt-runner**: FastAPI para disparar `dbt build` manualmente
 
-## Passo 2) Subir o repositório
-- Faça upload deste ZIP para um repositório Git (GitHub).
-- Conecte o repo ao Render e selecione o `render.yaml` automaticamente.
+## Variáveis
+- API/Dashboard: `DATABASE_URL`
+- dbt-runner: `DBT_HOST`, `DBT_USER`, `DBT_PASSWORD`, `DBT_PORT=5432`, `DBT_DBNAME`
+- (Opcional) `DBT_RUN_TOKEN` para proteger o endpoint
 
-## Serviços criados
-- **engajamento-api (web)**: FastAPI em Free — dorme quando ocioso, acorda ao 1º acesso.
-- **engajamento-dashboard (web)**: Streamlit em Free.
-- **dbt-build (cron)**: roda diariamente `dbt build` no Free.
+## Como rodar o dbt manualmente
+1. Depois do deploy, acesse o serviço **dbt-runner**:
+   - **POST** `https://<HOST-DBT-RUNNER>/dbt/build`
+     - Header opcional: `X-Token: <seu token>` (se `DBT_RUN_TOKEN` estiver setado)
+   - Resposta: `run_id`, `returncode`, `tail` (últimas linhas do log)
+2. Para ver logs completos:
+   - **GET** `https://<HOST-DBT-RUNNER>/dbt/logs/{run_id}`
 
-## Variáveis obrigatórias
-- Em **engajamento-api** e **engajamento-dashboard**: `DATABASE_URL`
-- No **cron dbt-build**: `DBT_HOST, DBT_USER, DBT_PASSWORD, DBT_PORT (5432), DBT_DBNAME`
+> Importante: o Render Free pode encerrar requisições muito longas. Por isso, retornamos o *tail* e gravamos o log em `/tmp/dbt_logs`. Se a chamada cair por timeout, você ainda consegue consultar depois com o `run_id`.
 
-## Carga de dados
-1. Converta seu Excel para CSV UTF-8 com cabeçalho conforme `README.md`.
-2. Importe para `staging.raw_vendas_achatado` (via psql Adminer/pgAdmin).
-3. O cron `dbt-build` criará `fato_venda` e `mart_rfm` diariamente (ou rode manualmente na aba **Manual Run** do cron).
-
-## Dica
-- Free dorme após inatividade; no 1º acesso pode demorar alguns segundos para acordar.
+## Fluxo sugerido
+- Suba CSV para `staging.raw_vendas_achatado`.
+- Dispare `POST /dbt/build` no **dbt-runner**.
+- Consulte o dashboard **engajamento-dashboard** e as APIs da **engajamento-api**.
