@@ -1,0 +1,7 @@
+name: b2b_engajamento
+version: 1.0.0
+profile: b2b_profile
+model-paths: ["models"]
+models:
+  b2b_engajamento:
+    +materialized: view

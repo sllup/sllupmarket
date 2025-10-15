@@ -1,0 +1,11 @@
+b2b_profile:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: ${DBT_HOST}
+      user: ${DBT_USER}
+      password: ${DBT_PASSWORD}
+      port: ${DBT_PORT}
+      dbname: ${DBT_DBNAME}
+      schema: public

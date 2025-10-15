@@ -1,0 +1,13 @@
+version: 2
+models:
+  - name: stg_vendas
+    tests:
+      - not_null:
+          column_name: sku
+      - not_null:
+          column_name: cod_cliente
+  - name: fato_venda
+    tests:
+      - unique:
+          column_name: id_fato_venda
+  - name: mart_rfm
