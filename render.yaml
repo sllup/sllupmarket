@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: engajamento-api
+    env: python
+    rootDir: apps/api
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false  # defina no painel do Render
+
+  - type: web
+    name: engajamento-dashboard
+    env: python
+    rootDir: apps/dashboard
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+
+  - type: cron
+    name: dbt-build
+    env: python
+    rootDir: .
+    schedule: "0 3 * * *"  # diariamente 03:00 BRT
+    buildCommand: pip install --no-cache-dir dbt-postgres
+    startCommand: ./scripts/dbt_build.sh
+    plan: free
+    envVars:
+      - key: DBT_HOST
+        sync: false
+      - key: DBT_USER
+        sync: false
+      - key: DBT_PASSWORD
+        sync: false
+      - key: DBT_PORT
+        value: "5432"
+      - key: DBT_DBNAME
+        sync: false
