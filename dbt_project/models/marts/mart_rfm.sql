@@ -1,1 +1,1 @@
-select * from {{ ref('fato_venda') }} limit 0;
+with x as (select 1) select * from x;
