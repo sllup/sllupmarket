@@ -1,4 +1,4 @@
--- dim_cliente (exemplo minimalista)
+-- dim_cliente (mínima)
 with base as (
   select cod_cliente, max(razao_social) as razao_social
   from {{ ref('stg_vendas') }}

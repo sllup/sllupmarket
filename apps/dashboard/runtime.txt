@@ -1,5 +1,1 @@
-numpy==2.0.2
-pandas==2.2.2
-psycopg[binary]==3.2.10
-streamlit==1.38.0
-python-dotenv==1.0.1
+python-3.12.6

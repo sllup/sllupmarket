@@ -1,7 +1,7 @@
-
 -- DDL v1 - Camada Canônica (Postgres)
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- Mantemos tabelas no schema padrão; o search_path tratará de resolver para SllupMarket
 CREATE TABLE IF NOT EXISTS dim_cliente (
   cod_cliente    TEXT PRIMARY KEY,
   razao_social   TEXT,

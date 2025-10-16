@@ -1,4 +1,4 @@
-import os, subprocess, uuid, shutil, time
+import os, subprocess, time
 from fastapi import FastAPI, Header, HTTPException
 from typing import Optional
 from pathlib import Path
@@ -7,15 +7,13 @@ APP_ROOT = Path(__file__).resolve().parent.parent.parent  # repo root
 DBT_DIR = APP_ROOT / "dbt_project"
 LOGS_DIR = Path(os.getenv("DBT_LOG_DIR", "/tmp/dbt_logs"))
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
-
-# Optional simple token protection
-EXPECTED_TOKEN = os.getenv("DBT_RUN_TOKEN")  # set in Render env if desired
+EXPECTED_TOKEN = os.getenv("DBT_RUN_TOKEN")  # opcional
 
 app = FastAPI(title="DBT Runner")
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status":"ok"}
 
 @app.post("/dbt/build")
 def dbt_build(x_token: Optional[str] = Header(default=None)):
@@ -27,17 +25,14 @@ def dbt_build(x_token: Optional[str] = Header(default=None)):
     if not DBT_DIR.exists():
         raise HTTPException(status_code=500, detail=f"dbt_project não encontrado em {DBT_DIR}")
 
-    # Prepare env for dbt from Render env vars
     env = os.environ.copy()
-    cmd = ["bash", "-lc", "cd dbt_project && dbt deps || true && dbt build --fail-fast | tee -a '{}'".format(str(log_path))]
+    cmd = f"cd dbt_project && dbt deps || true && dbt build --fail-fast | tee -a '{log_path}'"
 
     try:
-        # Run synchronously; for long builds, Render Free may terminate if idle.
-        proc = subprocess.run(" ".join(cmd), shell=True, cwd=APP_ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=540)
-        output = proc.stdout[-4000:]  # return tail
+        proc = subprocess.run(cmd, shell=True, cwd=APP_ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=540)
+        output = proc.stdout[-4000:]
         return {"run_id": run_id, "returncode": proc.returncode, "tail": output}
     except subprocess.TimeoutExpired as e:
-        # Process ran too long; return partial logs if any
         partial = e.stdout[-4000:] if isinstance(e.stdout, str) else ""
         return {"run_id": run_id, "returncode": None, "tail": partial, "timeout": True}
 

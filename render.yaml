@@ -3,11 +3,17 @@ services:
     name: engajamento-api
     env: python
     rootDir: apps/api
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    buildCommand: |
+      python -m pip install --upgrade pip wheel setuptools
+      python -m pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     plan: free
     autoDeploy: true
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.6
+      - key: PIP_PREFER_BINARY
+        value: "1"
       - key: DATABASE_URL
         sync: false
 
@@ -15,11 +21,18 @@ services:
     name: engajamento-dashboard
     env: python
     rootDir: apps/dashboard
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    buildCommand: |
+      python -m pip install --upgrade pip wheel setuptools
+      python -m pip install --only-binary=:all: "numpy==2.0.2" "pandas==2.2.2"
+      python -m pip install -r requirements.txt
     startCommand: streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0
     plan: free
     autoDeploy: true
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.6
+      - key: PIP_PREFER_BINARY
+        value: "1"
       - key: DATABASE_URL
         sync: false
 
@@ -28,13 +41,15 @@ services:
     env: python
     rootDir: apps/dbt_runner
     buildCommand: |
-      pip install --upgrade pip
-      pip install -r requirements.txt
-      pip install dbt-postgres
+      python -m pip install --upgrade pip wheel setuptools
+      python -m pip install -r requirements.txt
+      python -m pip install dbt-postgres
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     plan: free
     autoDeploy: true
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.6
       - key: DBT_HOST
         sync: false
       - key: DBT_USER
@@ -45,5 +60,7 @@ services:
         value: "5432"
       - key: DBT_DBNAME
         sync: false
+      - key: DBT_SSLMODE
+        value: require
       - key: DBT_RUN_TOKEN
-        sync: false   # opcional: defina para proteger o endpoint
+        sync: false

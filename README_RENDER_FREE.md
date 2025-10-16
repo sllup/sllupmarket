@@ -1,26 +1,18 @@
-# Deploy no Render (Free) – Build do dbt manual via Web Service
+# Deploy no Render (Free) – SllupMarket patch
 
-## Serviços criados pelo `render.yaml`
-- **engajamento-api**: FastAPI (dados/insights)
-- **engajamento-dashboard**: Streamlit
-- **dbt-runner**: FastAPI para disparar `dbt build` manualmente
+## Serviços (via render.yaml)
+- engajamento-api (FastAPI) – força `SET search_path TO "SllupMarket", public`
+- engajamento-dashboard (Streamlit) – idem
+- dbt-runner (FastAPI) – dispara `dbt build` manualmente
 
 ## Variáveis
 - API/Dashboard: `DATABASE_URL`
-- dbt-runner: `DBT_HOST`, `DBT_USER`, `DBT_PASSWORD`, `DBT_PORT=5432`, `DBT_DBNAME`
-- (Opcional) `DBT_RUN_TOKEN` para proteger o endpoint
+- dbt-runner: `DBT_HOST, DBT_PORT, DBT_DBNAME, DBT_USER, DBT_PASSWORD, DBT_SSLMODE=require` (+ opcional `DBT_RUN_TOKEN`)
+- Todas usam `PYTHON_VERSION=3.12.6`
 
-## Como rodar o dbt manualmente
-1. Depois do deploy, acesse o serviço **dbt-runner**:
-   - **POST** `https://<HOST-DBT-RUNNER>/dbt/build`
-     - Header opcional: `X-Token: <seu token>` (se `DBT_RUN_TOKEN` estiver setado)
-   - Resposta: `run_id`, `returncode`, `tail` (últimas linhas do log)
-2. Para ver logs completos:
-   - **GET** `https://<HOST-DBT-RUNNER>/dbt/logs/{run_id}`
+## Build
+- Dashboard instala binários de numpy/pandas para evitar compilação (Py 3.12).
 
-> Importante: o Render Free pode encerrar requisições muito longas. Por isso, retornamos o *tail* e gravamos o log em `/tmp/dbt_logs`. Se a chamada cair por timeout, você ainda consegue consultar depois com o `run_id`.
-
-## Fluxo sugerido
-- Suba CSV para `staging.raw_vendas_achatado`.
-- Dispare `POST /dbt/build` no **dbt-runner**.
-- Consulte o dashboard **engajamento-dashboard** e as APIs da **engajamento-api**.
+## Dicas
+- Se quiser embutir o schema via URL: `?options=-c%20search_path%3D%22SllupMarket%22%2Cpublic`
+- dbt: `cd dbt_project && dbt run` (via dbt-runner: `POST /dbt/build`).
