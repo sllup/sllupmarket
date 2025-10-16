@@ -29,12 +29,12 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
 with tab1:
     st.subheader("Indicadores")
     try:
-        df_counts = run_query("""
+        df_counts = run_query(\"\"\"
             select 
               (select count(*) from dim_cliente) as clientes,
               (select count(*) from dim_produto) as skus,
               (select count(*) from fato_venda)  as vendas
-        """)
+        \"\"\" )
         c1, c2, c3 = st.columns(3)
         c1.metric("Clientes", int(df_counts.iloc[0]["clientes"]))
         c2.metric("SKUs", int(df_counts.iloc[0]["skus"]))
@@ -46,23 +46,23 @@ with tab1:
 with tab2:
     st.subheader("Ranking RFM (Top 200)")
     try:
-        df_rfm = run_query("""
+        df_rfm = run_query(\"\"\"
             select cod_cliente, ultima_compra::date, freq, valor, r_score, f_score, m_score, 
                    (r_score + f_score + m_score) as rfm_score
             from mart_rfm
             order by rfm_score desc
             limit 200
-        """)
+        \"\"\" )
         st.dataframe(df_rfm, use_container_width=True)
-        cod = st.text_input("Buscar cliente (cod_cliente)")
+        cod = st.text_input("Buscar cliente (cod_cliente)", key="rfm_busca_cod")
         if cod:
-            df_v = run_query("""
+            df_v = run_query(\"\"\"
                 with rfm as (select * from mart_rfm where cod_cliente = %s)
                 select c.cod_cliente, c.razao_social, rfm.*
                 from dim_cliente c
                 left join rfm on rfm.cod_cliente = c.cod_cliente
                 where c.cod_cliente = %s
-            """, (cod, cod))
+            \"\"\", (cod, cod))
             st.dataframe(df_v, use_container_width=True)
     except Exception as e:
         st.warning("⚠️ Não encontrei `mart_rfm`. Rode o dbt build no mesmo banco do dashboard.")
@@ -71,12 +71,12 @@ with tab2:
 with tab3:
     st.subheader("Vendas recentes")
     try:
-        df_vendas = run_query("""
+        df_vendas = run_query(\"\"\"
             select data, cod_cliente, sku, tam, qtde, total_venda, total_custo, margem, documento_fiscal
             from fato_venda
             order by data desc
             limit 500
-        """)
+        \"\"\" )
         st.dataframe(df_vendas, use_container_width=True)
     except Exception as e:
         st.warning("Não foi possível carregar as vendas recentes. Verifique se `fato_venda` existe.")
@@ -85,12 +85,12 @@ with tab3:
 with tab4:
     st.subheader("Importar por URL (CSV/CSV.GZ) – recomendado p/ arquivos grandes")
     st.caption("Use URL de download direto. A API faz streaming e evita OOM.")
-    api_base = st.text_input("Base URL da API", value=os.getenv("API_BASE_URL", ""))
-    csv_url = st.text_input("URL do arquivo (csv ou csv.gz)")
-    mode = st.radio("Modo de carga", ["Full replace (TRUNCATE + INSERT)", "Append"], index=0)
-    date_fmt = st.selectbox("Formato da data (coluna 'data')", ["YYYY-MM-DD", "DD/MM/YYYY"], index=0)
+    api_base = st.text_input("Base URL da API", value=os.getenv("API_BASE_URL", ""), key="api_base_url_url")
+    csv_url = st.text_input("URL do arquivo (csv ou csv.gz)", key="csv_url_field")
+    mode = st.radio("Modo de carga", ["Full replace (TRUNCATE + INSERT)", "Append"], index=0, key="modo_url")
+    date_fmt = st.selectbox("Formato da data (coluna 'data')", ["YYYY-MM-DD", "DD/MM/YYYY"], index=0, key="datefmt_url")
 
-    if st.button("Importar do URL"):
+    if st.button("Importar do URL", key="btn_import_url"):
         if not api_base or not csv_url:
             st.error("Preencha a API Base URL e a URL do arquivo.")
         else:
@@ -101,8 +101,8 @@ with tab4:
                     data = resp.json()
                     if data.get("ok"):
                         st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')}")
-                        with st.expander("Preview (até 5 linhas) + Tipos inferidos"):
-                            st.code("\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
+                        with st.expander("Preview (até 5 linhas) + Tipos inferidos", expanded=False):
+                            st.code("\\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
                             st.json(data.get("types", {}))
                     else:
                         st.error(f"Falhou: {data}")
@@ -114,25 +114,25 @@ with tab4:
 with tab5:
     st.subheader("Upload de CSV (até 64MB) – para arquivos pequenos")
     st.caption("Para arquivos grandes, prefira a aba 'Importar por URL' para evitar OOM no Render Free.")
-    api_base = st.text_input("Base URL da API", value=os.getenv("API_BASE_URL", ""))
-    uploaded = st.file_uploader("Escolha um arquivo .csv ou .csv.gz", type=["csv", "gz"])
-    mode = st.radio("Modo de carga (upload)", ["Full replace (TRUNCATE + INSERT)", "Append"], index=0, key="upload_mode")
-    date_fmt = st.selectbox("Formato da data (upload)", ["YYYY-MM-DD", "DD/MM/YYYY"], index=0, key="upload_fmt")
+    api_base_up = st.text_input("Base URL da API", value=os.getenv("API_BASE_URL", ""), key="api_base_url_upload")
+    uploaded = st.file_uploader("Escolha um arquivo .csv ou .csv.gz", type=["csv", "gz"], key="uploader_csv")
+    mode_up = st.radio("Modo de carga (upload)", ["Full replace (TRUNCATE + INSERT)", "Append"], index=0, key="modo_upload")
+    date_fmt_up = st.selectbox("Formato da data (upload)", ["YYYY-MM-DD", "DD/MM/YYYY"], index=0, key="datefmt_upload")
 
-    if st.button("Enviar upload"):
-        if not api_base or not uploaded:
+    if st.button("Enviar upload", key="btn_upload"):
+        if not api_base_up or not uploaded:
             st.error("Informe a API Base URL e selecione um arquivo.")
         else:
             try:
                 files = {"file": (uploaded.name, uploaded, "application/octet-stream")}
-                data = {"mode": "full" if mode.startswith("Full") else "append", "date_format": date_fmt}
-                resp = requests.post(api_base.rstrip("/") + "/ingest/upload", files=files, data=data, timeout=900)
+                data = {"mode": "full" if mode_up.startswith("Full") else "append", "date_format": date_fmt_up}
+                resp = requests.post(api_base_up.rstrip("/") + "/ingest/upload", files=files, data=data, timeout=900)
                 if resp.status_code == 200:
                     data = resp.json()
                     if data.get("ok"):
                         st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')}")
-                        with st.expander("Preview (até 5 linhas) + Tipos inferidos"):
-                            st.code("\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
+                        with st.expander("Preview (até 5 linhas) + Tipos inferidos", expanded=False):
+                            st.code("\\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
                             st.json(data.get("types", {}))
                     else:
                         st.error(f"Falhou: {data}")
@@ -146,11 +146,11 @@ st.subheader("DBT Runner")
 st.caption("Dispare o `dbt build` manualmente após a ingestão.")
 colA, colB = st.columns(2)
 with colA:
-    dbt_url = st.text_input("DBT Runner URL", value=os.getenv("DBT_RUNNER_URL", ""))
+    dbt_url = st.text_input("DBT Runner URL", value=os.getenv("DBT_RUNNER_URL", ""), key="dbt_runner_url")
 with colB:
-    dbt_token = st.text_input("DBT Runner Token (X-Token)", type="password", value=os.getenv("DBT_RUNNER_TOKEN", ""))
+    dbt_token = st.text_input("DBT Runner Token (X-Token)", type="password", value=os.getenv("DBT_RUNNER_TOKEN", ""), key="dbt_runner_token")
 
-if st.button("Rodar dbt build agora"):
+if st.button("Rodar dbt build agora", key="btn_dbt_build"):
     if not dbt_url:
         st.warning("Informe a URL do dbt-runner.")
     else:
