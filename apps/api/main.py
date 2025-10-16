@@ -12,7 +12,6 @@ def get_conn():
   if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL não configurado")
   conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
-  # 🔧 força search_path para o schema SllupMarket
   with conn.cursor() as cur:
     cur.execute('SET search_path TO "SllupMarket", public;')
   return conn

@@ -1,16 +1,11 @@
--- DDL v1 - Camada Canônica (Postgres)
+-- DDL base (use SET search_path TO "SllupMarket", public; antes de rodar)
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- Mantemos tabelas no schema padrão; o search_path tratará de resolver para SllupMarket
+CREATE SCHEMA IF NOT EXISTS staging;
+
 CREATE TABLE IF NOT EXISTS dim_cliente (
   cod_cliente    TEXT PRIMARY KEY,
-  razao_social   TEXT,
-  cnpj           TEXT,
-  segmento       TEXT,
-  cidade         TEXT,
-  uf             TEXT,
-  status_crm     TEXT,
-  criado_em      DATE
+  razao_social   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS dim_produto (
@@ -20,15 +15,6 @@ CREATE TABLE IF NOT EXISTS dim_produto (
   sub_familia    TEXT,
   marca          TEXT,
   cor            TEXT
-);
-
-CREATE TABLE IF NOT EXISTS dim_tempo (
-  data           DATE PRIMARY KEY,
-  ano            INT,
-  mes            INT,
-  semana         INT,
-  trimestre      INT,
-  yyyymm         INT
 );
 
 CREATE TABLE IF NOT EXISTS fato_venda (
@@ -49,8 +35,6 @@ CREATE TABLE IF NOT EXISTS fato_venda (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_venda_nf_item ON fato_venda (
   COALESCE(documento_fiscal,''), COALESCE(sku,''), COALESCE(tam,'')
 );
-
-CREATE SCHEMA IF NOT EXISTS staging;
 
 CREATE TABLE IF NOT EXISTS staging.raw_vendas_achatado (
   data            TEXT,
