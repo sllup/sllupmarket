@@ -1,1 +1,1 @@
--- DDL as before
+-- DDL will be here

@@ -1,1 +1,1 @@
-select * from {{ ref('stg_vendas') }} where data is not null and sku is not null and cod_cliente is not null;
+select * from {{ ref('stg_vendas') }};
