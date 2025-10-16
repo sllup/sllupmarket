@@ -82,10 +82,12 @@ with tab3:
         st.warning("Não foi possível carregar as vendas recentes. Verifique se `fato_venda` existe.")
         st.exception(e)
 
+DEFAULT_API = os.getenv("API_BASE_URL", "https://engajamento-api.onrender.com")
+
 with tab4:
     st.subheader("Importar por URL (CSV/CSV.GZ) – recomendado p/ arquivos grandes")
     st.caption("Use URL de download direto. A API faz streaming e evita OOM.")
-    api_base = st.text_input("Base URL da API", value=os.getenv("API_BASE_URL", ""), key="api_base_url_url")
+    api_base = st.text_input("Base URL da API", value=DEFAULT_API, key="api_base_url_url")
     csv_url = st.text_input("URL do arquivo (csv ou csv.gz)", key="csv_url_field")
     mode = st.radio("Modo de carga", ["Full replace (TRUNCATE + INSERT)", "Append"], index=0, key="modo_url")
     date_fmt = st.selectbox("Formato da data (coluna 'data')", ["YYYY-MM-DD", "DD/MM/YYYY"], index=0, key="datefmt_url")
@@ -114,7 +116,7 @@ with tab4:
 with tab5:
     st.subheader("Upload de CSV (até 64MB) – para arquivos pequenos")
     st.caption("Para arquivos grandes, prefira a aba 'Importar por URL' para evitar OOM no Render Free.")
-    api_base_up = st.text_input("Base URL da API", value=os.getenv("API_BASE_URL", ""), key="api_base_url_upload")
+    api_base_up = st.text_input("Base URL da API", value=DEFAULT_API, key="api_base_url_upload")
     uploaded = st.file_uploader("Escolha um arquivo .csv ou .csv.gz", type=["csv", "gz"], key="uploader_csv")
     mode_up = st.radio("Modo de carga (upload)", ["Full replace (TRUNCATE + INSERT)", "Append"], index=0, key="modo_upload")
     date_fmt_up = st.selectbox("Formato da data (upload)", ["YYYY-MM-DD", "DD/MM/YYYY"], index=0, key="datefmt_upload")
