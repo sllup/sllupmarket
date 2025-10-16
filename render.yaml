@@ -1,1 +1,25 @@
-services: []
+services:
+  - type: web
+    name: engajamento-dashboard
+    env: python
+    rootDir: apps/dashboard
+    buildCommand: |
+      python -m pip install --upgrade pip wheel setuptools
+      python -m pip install --only-binary=:all: "numpy==2.0.2" "pandas==2.2.2"
+      python -m pip install -r requirements.txt
+    startCommand: streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.6
+      - key: PIP_PREFER_BINARY
+        value: "1"
+      - key: DATABASE_URL
+        sync: false
+      - key: API_BASE_URL
+        sync: false
+      - key: DBT_RUNNER_URL
+        sync: false
+      - key: DBT_RUNNER_TOKEN
+        sync: false
