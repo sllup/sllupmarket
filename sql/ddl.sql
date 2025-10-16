@@ -32,10 +32,6 @@ CREATE TABLE IF NOT EXISTS fato_venda (
   carga_dt             TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_venda_nf_item ON fato_venda (
-  COALESCE(documento_fiscal,''), COALESCE(sku,''), COALESCE(tam,'')
-);
-
 CREATE TABLE IF NOT EXISTS staging.raw_vendas_achatado (
   data            TEXT,
   produto         TEXT,

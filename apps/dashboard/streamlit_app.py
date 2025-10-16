@@ -5,7 +5,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 st.set_page_config(page_title="Engajamento B2B", layout="wide")
-st.title("📊 Engajamento B2B – v1 (MVP)")
+st.title("📊 Engajamento B2B – v2 (Streaming Upload)")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -82,9 +82,9 @@ with tab3:
         st.exception(e)
 
 # -------------------------
-# 📤 Upload CSV -> staging (streaming, low-mem)
+# 📤 Upload CSV -> staging (streaming, ultra low-mem)
 # -------------------------
-import csv, io, tempfile, gzip
+import csv, io, os, tempfile, gzip, shutil, gc
 
 try:
     import requests  # opcional: acionar dbt-runner
@@ -94,7 +94,7 @@ except Exception:
 tab4, = st.tabs(["Upload CSV"])
 
 with tab4:
-    st.subheader("Upload para staging.raw_vendas_achatado (streaming)")
+    st.subheader("Upload para staging.raw_vendas_achatado (streaming, disco)")
     st.caption("Cabeçalho esperado: data,produto,sku,familia,sub_familia,cor,tam,marca,cod_cliente,razao_social,qtde,preco_unit,total_venda,total_custo,margem,documento_fiscal")
 
     file = st.file_uploader("Selecione o CSV (UTF-8) — também aceita .csv.gz", type=["csv", "gz"])
@@ -107,118 +107,123 @@ with tab4:
         dbt_token = st.text_input("DBT Runner Token (X-Token)", type="password", value=os.getenv("DBT_RUNNER_TOKEN", ""))
 
     if file is not None:
-        # Detecta gzip pelo nome
         is_gz = (file.name or "").lower().endswith(".gz")
-
-        # Abre o arquivo em modo streaming (sem carregar tudo na RAM)
-        def open_text_stream(uploaded_file, gz=False):
-            uploaded_file.seek(0)
-            if gz:
-                return io.TextIOWrapper(gzip.GzipFile(fileobj=uploaded_file, mode="rb"), encoding="utf-8", newline="")
-            else:
-                return io.TextIOWrapper(uploaded_file, encoding="utf-8", newline="")
-
+        tmp_in = None
         try:
-            text_stream = open_text_stream(file, gz=is_gz)
-            reader = csv.reader(text_stream)
-            header = next(reader, None)
-        except Exception as e:
-            st.error(f"Falha ao ler o cabeçalho: {e}")
-            st.stop()
+            # 1) Copia o upload para disco em chunks (1MB) — sem manter em RAM
+            suffix = ".csv.gz" if is_gz else ".csv"
+            tmp_in = tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=suffix)
+            file.seek(0)
+            for chunk in iter(lambda: file.read(1024 * 1024), b""):  # 1MB
+                tmp_in.write(chunk)
+            tmp_in.flush(); tmp_in.close()
 
-        req_cols = ["data","produto","sku","familia","sub_familia","cor","tam","marca","cod_cliente","razao_social","qtde","preco_unit","total_venda","total_custo","margem","documento_fiscal"]
+            # 2) Preview leve (somente 5 linhas), lendo do disco
+            def open_text_reader(path):
+                if path.endswith(".gz"):
+                    f = gzip.open(path, mode="rt", encoding="utf-8", newline="")
+                else:
+                    f = open(path, mode="rt", encoding="utf-8", newline="")
+                return f, csv.reader(f)
 
-        if not header:
-            st.error("CSV sem cabeçalho.")
-            st.stop()
+            fprev, rprev = open_text_reader(tmp_in.name)
+            header = next(rprev, None)
+            if not header:
+                st.error("CSV sem cabeçalho."); fprev.close(); raise SystemExit
+            req_cols = ["data","produto","sku","familia","sub_familia","cor","tam","marca","cod_cliente","razao_social","qtde","preco_unit","total_venda","total_custo","margem","documento_fiscal"]
 
-        miss = [c for c in req_cols if c not in header]
-        extra = [c for c in header if c not in req_cols]
-        if miss:
-            st.error(f"Colunas faltantes: {miss}")
-            st.stop()
-        if extra:
-            st.info(f"Colunas extras serão ignoradas: {extra}")
+            miss = [c for c in req_cols if c not in header]
+            extra = [c for c in header if c not in req_cols]
+            if miss:
+                st.error(f"Colunas faltantes: {miss}")
+                fprev.close(); raise SystemExit
+            if extra:
+                st.info(f"Colunas extras serão ignoradas: {extra}")
 
-        # Preview leve (5 linhas)
-        preview_rows = []
-        for _ in range(5):
-            row = next(reader, None)
-            if row is None:
-                break
-            preview_rows.append(row)
-        st.code("\n".join([",".join(header)] + [",".join(r) for r in preview_rows]), language="csv")
+            preview_rows = []
+            for _ in range(5):
+                row = next(rprev, None)
+                if row is None:
+                    break
+                preview_rows.append(row)
+            fprev.close()
+            st.code("\n".join([",".join(header)] + [",".join(r) for r in preview_rows]), language="csv")
 
-        # Reposiciona o stream para começar de novo
-        file.seek(0)
-        text_stream = open_text_stream(file, gz=is_gz)
-        reader = csv.reader(text_stream)
-        _ = next(reader, None)  # pula cabeçalho
-
-        if st.button("Carregar no banco (streaming)"):
-            tmp_path = None
-            try:
-                # Cria arquivo temporário no disco (não usa RAM)
-                with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".csv") as tmp:
-                    tmp_path = tmp.name
-                    writer = csv.writer(tmp, lineterminator="\n")
-                    writer.writerow(req_cols)
+            # 3) Botão de carga — filtrar para outro arquivo no disco e fazer COPY
+            if st.button("Carregar no banco (streaming via disco)"):
+                tmp_filtered = None
+                try:
+                    tmp_filtered = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".csv", encoding="utf-8", newline="")
                     idx = [header.index(c) for c in req_cols]
 
-                    # Escreve no temp à medida que lê (linha a linha)
+                    fin, rin = open_text_reader(tmp_in.name)
+                    _ = next(rin, None)  # pula cabeçalho
+                    w = csv.writer(tmp_filtered, lineterminator="\n")
+                    w.writerow(req_cols)
+
                     count = 0
-                    for row in reader:
+                    for row in rin:
                         if not row:
                             continue
                         if len(row) < len(header):
                             row = row + [""] * (len(header) - len(row))
-                        writer.writerow([row[i] for i in idx])
+                        w.writerow([row[i] for i in idx])
                         count += 1
                         if count % 50000 == 0:
-                            tmp.flush()  # descarrega para disco periodicamente
+                            tmp_filtered.flush()
+                    fin.close()
+                    tmp_filtered.flush(); tmp_filtered.close()
 
-                # COPY FROM STDIN lendo do arquivo temporário (stream)
-                with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
-                    with conn.cursor() as cur:
-                        if mode.startswith("Full"):
-                            cur.execute('TRUNCATE TABLE staging.raw_vendas_achatado;')
+                    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+                        with conn.cursor() as cur:
+                            if mode.startswith("Full"):
+                                cur.execute('TRUNCATE TABLE staging.raw_vendas_achatado;')
+                            copy_sql = """
+                            COPY staging.raw_vendas_achatado
+                            (data,produto,sku,familia,sub_familia,cor,tam,marca,cod_cliente,razao_social,qtde,preco_unit,total_venda,total_custo,margem,documento_fiscal)
+                            FROM STDIN WITH (FORMAT csv, HEADER true)
+                            """
+                            with open(tmp_filtered.name, "r", encoding="utf-8") as fcsv:
+                                cur.copy(copy_sql, fcsv)
+                        conn.commit()
 
-                        copy_sql = """
-                        COPY staging.raw_vendas_achatado
-                        (data,produto,sku,familia,sub_familia,cor,tam,marca,cod_cliente,razao_social,qtde,preco_unit,total_venda,total_custo,margem,documento_fiscal)
-                        FROM STDIN WITH (FORMAT csv, HEADER true)
-                        """
-                        with open(tmp_path, "r", encoding="utf-8") as f:
-                            cur.copy(copy_sql, f)
-                    conn.commit()
+                    st.success(f"Carga concluída na staging.raw_vendas_achatado ✅ Linhas: ~{count}")
 
-                st.success("Carga concluída na staging.raw_vendas_achatado ✅")
+                    # 4) Disparar dbt build (opcional)
+                    if do_dbt:
+                        if not dbt_url:
+                            st.warning("Informe a URL do dbt-runner para disparar o build.")
+                        elif requests is None:
+                            st.warning("Instale 'requests' no requirements.txt para usar o disparo do dbt.")
+                        else:
+                            try:
+                                headers = {"X-Token": dbt_token} if dbt_token else {}
+                                resp = requests.post(dbt_url.rstrip("/") + "/dbt/build", headers=headers, timeout=120)
+                                if resp.status_code == 200:
+                                    data = resp.json()
+                                    st.info(f"dbt build disparado. run_id={data.get('run_id')} returncode={data.get('returncode')}")
+                                    st.code((data.get('tail','') or '')[-2000:], language="bash")
+                                else:
+                                    st.warning(f"dbt-runner respondeu {resp.status_code}: {resp.text}")
+                            except Exception as e:
+                                st.error(f"Falha ao chamar dbt-runner: {e}")
 
-                # Disparar dbt build (opcional)
-                if do_dbt:
-                    if not dbt_url:
-                        st.warning("Informe a URL do dbt-runner para disparar o build.")
-                    elif requests is None:
-                        st.warning("Instale 'requests' no requirements.txt para usar o disparo do dbt.")
-                    else:
-                        try:
-                            headers = {"X-Token": dbt_token} if dbt_token else {}
-                            import requests as _req
-                            resp = _req.post(dbt_url.rstrip("/") + "/dbt/build", headers=headers, timeout=120)
-                            if resp.status_code == 200:
-                                data = resp.json()
-                                st.info(f"dbt build disparado. run_id={data.get('run_id')} returncode={data.get('returncode')}")
-                                st.code((data.get('tail','') or '')[-2000:], language="bash")
-                            else:
-                                st.warning(f"dbt-runner respondeu {resp.status_code}: {resp.text}")
-                        except Exception as e:
-                            st.error(f"Falha ao chamar dbt-runner: {e}")
+                except Exception as e:
+                    st.exception(e)
+                finally:
+                    try:
+                        if tmp_filtered and os.path.exists(tmp_filtered.name):
+                            os.remove(tmp_filtered.name)
+                    except Exception:
+                        pass
+                    import gc as _gc; _gc.collect()
 
-            except Exception as e:
-                st.exception(e)
-            finally:
-                try:
-                    if tmp_path and os.path.exists(tmp_path):
-                        os.remove(tmp_path)
-                except Exception:
-                    pass
+        except Exception as e:
+            st.exception(e)
+        finally:
+            try:
+                if tmp_in and os.path.exists(tmp_in.name):
+                    os.remove(tmp_in.name)
+            except Exception:
+                pass
+            import gc as _gc; _gc.collect()
