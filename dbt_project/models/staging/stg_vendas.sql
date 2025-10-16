@@ -20,6 +20,7 @@ with src as (
 ),
 casted as (
   select
+    -- se vier DD/MM/YYYY, a API já converte para YYYY-MM-DD
     to_date(data, 'YYYY-MM-DD') as data,
     produto,
     sku,

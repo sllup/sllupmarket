@@ -78,6 +78,7 @@ def churn_top(n: int = 20):
 
 # ----------------------
 # Ingestão por URL (streaming, low-mem) -> staging.raw_vendas_achatado
+# Suporte a date_format: 'YYYY-MM-DD' (default) ou 'DD/MM/YYYY'
 # ----------------------
 REQ_COLS = ["data","produto","sku","familia","sub_familia","cor","tam","marca",
             "cod_cliente","razao_social","qtde","preco_unit","total_venda",
@@ -90,11 +91,29 @@ def _open_text_reader(path):
         f = open(path, mode="rt", encoding="utf-8", newline="")
     return f, csv.reader(f)
 
+def _convert_date(val: str, fmt: str) -> str:
+    if not val:
+        return val
+    if fmt == "DD/MM/YYYY":
+        # esperado dd/mm/aaaa -> yyyy-mm-dd
+        # valida minimamente
+        parts = val.split("/")
+        if len(parts) == 3 and all(parts):
+            dd, mm, yyyy = parts
+            if len(yyyy) == 4 and len(mm) in (1,2) and len(dd) in (1,2):
+                return f"{yyyy}-{int(mm):02d}-{int(dd):02d}"
+    # default assume já está YYYY-MM-DD
+    return val
+
 @app.post("/ingest/url")
-def ingest_from_url(url: str = Body(..., embed=True),
-                    mode: str = Body("full", embed=True)):
+def ingest_from_url(
+    url: str = Body(..., embed=True),
+    mode: str = Body("full", embed=True),
+    date_format: str = Body("YYYY-MM-DD", embed=True)  # ou "DD/MM/YYYY"
+):
     """Baixa CSV (.csv ou .csv.gz) via streaming -> /tmp, reordena/filtra colunas -> /tmp
-    e faz COPY em staging.raw_vendas_achatado. mode: "full" (TRUNCATE) ou "append"."""
+    e faz COPY em staging.raw_vendas_achatado. mode: "full" (TRUNCATE) ou "append".
+    date_format: "YYYY-MM-DD" (default) ou "DD/MM/YYYY"."""
     # 1) download streaming para disco
     try:
         with requests.get(url, stream=True, timeout=600) as r:
@@ -123,11 +142,15 @@ def ingest_from_url(url: str = Body(..., embed=True),
             raise HTTPException(status_code=400, detail=f"Colunas faltantes: {miss}")
         idx = [header.index(c) for c in REQ_COLS]
 
-        # preview até 5 linhas
+        # preview até 5 linhas (já convertendo data se necessário)
         preview = []
         for _ in range(5):
             row = next(rprev, None)
             if row is None: break
+            if "data" in header:
+                di = header.index("data")
+                row = list(row)
+                row[di] = _convert_date(row[di], date_format)
             preview.append(row)
         fprev.close()
 
@@ -143,6 +166,10 @@ def ingest_from_url(url: str = Body(..., embed=True),
                     continue
                 if len(row) < len(header):
                     row = row + [""] * (len(header) - len(row))
+                # converte data se necessário
+                row = list(row)
+                d_idx = header.index("data")
+                row[d_idx] = _convert_date(row[d_idx], date_format)
                 w.writerow([row[i] for i in idx])
                 count += 1
                 if count % 50000 == 0:
@@ -168,7 +195,14 @@ def ingest_from_url(url: str = Body(..., embed=True),
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Erro no COPY: {e}")
 
-        return {"ok": True, "rows": count, "mode": mode, "preview_header": header, "preview_rows": preview}
+        return {
+            "ok": True,
+            "rows": count,
+            "mode": mode,
+            "date_format": date_format,
+            "preview_header": header,
+            "preview_rows": preview
+        }
     finally:
         try:
             if out_path and os.path.exists(out_path): os.remove(out_path)
