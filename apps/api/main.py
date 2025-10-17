@@ -1,4 +1,3 @@
-
 import os, tempfile, csv, gzip, re, json
 from typing import Dict, Any, Optional, List, Tuple
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
@@ -25,7 +24,12 @@ def get_conn():
 
 @app.get("/health")
 def health():
-    return {"status":"ok","staging_table":STAGING_TABLE,"fallback_delete":FALLBACK_DELETE}
+    return {
+        "status":"ok",
+        "staging_table":STAGING_TABLE,
+        "fallback_delete":FALLBACK_DELETE,
+        "dbt_runner_url": DBT_RUNNER_URL
+    }
 
 REQ_COLS = ["data","produto","sku","familia","sub_familia","cor","tam","marca",
             "cod_cliente","razao_social","qtde","preco_unit","total_venda",
@@ -203,7 +207,6 @@ def process_to_filtered_csv(in_path: str, date_format: str, header_map: Optional
 
 def copy_into_db(out_path: str, mode: str):
     with get_conn() as conn:
-        # iniciamos uma transação; em caso de erro no TRUNCATE, precisamos de rollback
         try:
             with conn.cursor() as cur:
                 if mode.lower().startswith("full"):
@@ -211,7 +214,7 @@ def copy_into_db(out_path: str, mode: str):
                         cur.execute(f'TRUNCATE TABLE {STAGING_TABLE};')
                     except Exception as e:
                         if FALLBACK_DELETE:
-                            conn.rollback()  # limpa estado de erro
+                            conn.rollback()
                             with conn.cursor() as cur2:
                                 cur2.execute(f'DELETE FROM {STAGING_TABLE};')
                         else:
@@ -230,100 +233,44 @@ def copy_into_db(out_path: str, mode: str):
             conn.rollback()
             raise
 
-@app.post("/ingest/url")
-def ingest_from_url(
-    url: str = Body(..., embed=True),
-    mode: str = Body("full", embed=True),
-    date_format: str = Body("YYYY-MM-DD", embed=True),
-    header_map: Optional[Dict[str,str]] = Body(None, embed=True)
-):
-    try:
-        with requests.get(url, stream=True, timeout=900) as r:
-            r.raise_for_status()
-            suffix = ".csv.gz" if url.lower().endswith(".gz") else ".csv"
-            with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=suffix) as tmp_in:
-                for chunk in r.iter_content(chunk_size=1024*1024):
-                    if chunk:
-                        tmp_in.write(chunk)
-                in_path = tmp_in.name
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Falha no download: {e}")
-
-    out_path = None
-    try:
-        proc = process_to_filtered_csv(in_path, date_format, header_map)
-        out_path = proc["out_path"]
-        copy_into_db(out_path, mode)
-        return {"ok": True, "rows": proc["count"], "mode": mode, "date_format": date_format,
-                "dialect": proc["dialect"], "preview_header": proc["header"], "preview_rows": proc["preview"],
-                "staging_table": proc["staging_table"]}
-    finally:
-        try:
-            if out_path and os.path.exists(out_path): os.remove(out_path)
-        except Exception: pass
-        try:
-            if in_path and os.path.exists(in_path): os.remove(in_path)
-        except Exception: pass
-
-@app.post("/ingest/upload")
-async def ingest_upload(
-    file: UploadFile = File(...),
-    mode: str = Form("full"),
-    date_format: str = Form("YYYY-MM-DD"),
-    header_map_json: Optional[str] = Form(None, description="JSON com mapeamento: {'data':'Data','sku':'SKU',...}")
-):
-    header_map = None
-    if header_map_json:
-        try:
-            header_map = json.loads(header_map_json)
-            if not isinstance(header_map, dict):
-                raise ValueError("header_map_json deve ser um objeto JSON")
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"header_map_json inválido: {e}")
-
-    try:
-        suffix = ".csv.gz" if file.filename.lower().endswith(".gz") else ".csv"
-        with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=suffix) as tmp_in:
-            while True:
-                chunk = await file.read(1024*1024)
-                if not chunk: break
-                tmp_in.write(chunk)
-            in_path = tmp_in.name
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Falha ao receber upload: {e}")
-
-    out_path = None
-    try:
-        proc = process_to_filtered_csv(in_path, date_format, header_map)
-        out_path = proc["out_path"]
-        copy_into_db(out_path, mode)
-        return {"ok": True, "rows": proc["count"], "mode": mode, "date_format": date_format,
-                "dialect": proc["dialect"], "preview_header": proc["header"], "preview_rows": proc["preview"],
-                "staging_table": proc["staging_table"]}
-    finally:
-        try:
-            if out_path and os.path.exists(out_path): os.remove(out_path)
-        except Exception: pass
-        try:
-            if in_path and os.path.exists(in_path): os.remove(in_path)
-        except Exception: pass
+def _dbt_headers_variants():
+    variants = []
+    if DBT_RUNNER_TOKEN:
+        variants.append({"X-Token": DBT_RUNNER_TOKEN})
+        variants.append({"Authorization": f"Bearer {DBT_RUNNER_TOKEN}"})
+    variants.append({})
+    return variants
 
 @app.post("/dbt/run")
 def dbt_run():
     if not DBT_RUNNER_URL:
         raise HTTPException(status_code=500, detail="DBT_RUNNER_URL não configurado na API")
-    try:
-        headers = {"X-Token": DBT_RUNNER_TOKEN} if DBT_RUNNER_TOKEN else {}
-        r = requests.post(DBT_RUNNER_URL.rstrip("/") + "/dbt/build", headers=headers, timeout=900)
-        payload = {"ok": r.ok, "status": r.status_code}
-        try:
-            j = r.json()
-            if isinstance(j, dict):
-                payload["tail"] = j.get("tail")
-            else:
-                payload["raw"] = j
-        except Exception:
-            payload["text"] = r.text[:5000]
-        return payload
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Falha ao acionar DBT runner: {e}")
+    base = DBT_RUNNER_URL.rstrip("/")
+    candidates = ["/dbt/build", "/dbt/run", "/build", "/run", "/api/dbt/build", "/api/build"]
+    tried = []
+    last = None
+    for path in candidates:
+        url = base + path
+        for hdr in _dbt_headers_variants():
+            try:
+                r = requests.post(url, headers=hdr, json={}, timeout=900)
+                meta = {"url": url, "headers": list(hdr.keys()), "status": r.status_code}
+                try:
+                    j = r.json()
+                except Exception:
+                    j = None
+                if r.ok:
+                    resp = {"ok": True, "status": r.status_code, "used_url": url, "used_headers": list(hdr.keys())}
+                    if j:
+                        resp["tail"] = j.get("tail") or j
+                    else:
+                        resp["text"] = r.text[:5000]
+                    return resp
+                else:
+                    tried.append(meta | {"body": (j if j else r.text[:500])})
+                    last = (r.status_code, j if j else r.text[:500], url, list(hdr.keys()))
+            except Exception as e:
+                tried.append({"url": url, "headers": list(hdr.keys()), "error": str(e)})
+                last = (0, str(e), url, list(hdr.keys()))
+    detail = {"message": "Nenhum endpoint DBT aceitou a chamada", "tried": tried[-6:]}
+    raise HTTPException(status_code=404 if last and last[0]==404 else 502, detail=detail)
