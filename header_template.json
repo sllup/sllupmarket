@@ -1,0 +1,18 @@
+{
+  "data": "Data",
+  "produto": "Produto",
+  "sku": "SKU",
+  "familia": "Família",
+  "sub_familia": "Sub-família",
+  "cor": "Cor",
+  "tam": "Tam",
+  "marca": "Marca",
+  "cod_cliente": "Cód. Cliente",
+  "razao_social": "Razão social",
+  "qtde": "Qtde",
+  "preco_unit": "Preço unit",
+  "total_venda": "Total venda",
+  "total_custo": "Total custo",
+  "margem": "Margem",
+  "documento_fiscal": "Documento Fiscal"
+}

@@ -1,11 +1,12 @@
-import os, requests
+
+import os, json, requests
 import pandas as pd
 import streamlit as st
 import psycopg
 from psycopg.rows import dict_row
 
 st.set_page_config(page_title="Engajamento B2B", layout="wide")
-st.title("📊 Engajamento B2B – v3 PRO (URL & Upload, Autodetect, DBT Trigger via API)")
+st.title("📊 Engajamento B2B – v4 (aliases de header, URL & Upload, DBT via API)")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -22,9 +23,8 @@ def run_query(sql, params=None):
             rows = cur.fetchall()
             return pd.DataFrame(rows)
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-    ["Visão Geral", "Clientes (RFM)", "Explorar Vendas", "Importar por URL", "Upload CSV", "DBT"]
-)
+tabs = st.tabs(["Visão Geral","Clientes (RFM)","Explorar Vendas","Importar por URL","Upload CSV","DBT"])
+tab1, tab2, tab3, tab4, tab5, tab6 = tabs
 
 with tab1:
     st.subheader("Indicadores")
@@ -84,30 +84,41 @@ with tab3:
 
 DEFAULT_API = os.getenv("API_BASE_URL", "https://engajamento-api.onrender.com")
 
+def parse_header_map_json(txt):
+    if not txt:
+        return None
+    try:
+        j = json.loads(txt)
+        if isinstance(j, dict):
+            return j
+        st.error("header_map deve ser um objeto JSON (ex.: {'data':'Data','sku':'SKU'})")
+    except Exception as e:
+        st.error(f"JSON inválido: {e}")
+    return None
+
 with tab4:
     st.subheader("Importar por URL (CSV/CSV.GZ) – recomendado p/ arquivos grandes")
-    st.caption("Use URL de download direto. A API faz streaming e evita OOM.")
+    st.caption("Se os nomes das colunas diferirem, use o campo 'header_map' para mapear. Exemplo: {'data':'Data','cod_cliente':'Cód. Cliente'}")
     api_base = st.text_input("Base URL da API", value=DEFAULT_API, key="api_base_url_url")
     csv_url = st.text_input("URL do arquivo (csv ou csv.gz)", key="csv_url_field")
+    header_map_txt = st.text_area("header_map (JSON opcional)", height=100, key="header_map_url")
     mode = st.radio("Modo de carga", ["Full replace (TRUNCATE + INSERT)", "Append"], index=0, key="modo_url")
     date_fmt = st.selectbox("Formato da data (coluna 'data')", ["YYYY-MM-DD", "DD/MM/YYYY"], index=0, key="datefmt_url")
 
     if st.button("Importar do URL", key="btn_import_url"):
+        hm = parse_header_map_json(header_map_txt)
         if not api_base or not csv_url:
             st.error("Preencha a API Base URL e a URL do arquivo.")
         else:
             try:
-                payload = {"url": csv_url, "mode": "full" if mode.startswith("Full") else "append", "date_format": date_fmt}
+                payload = {"url": csv_url, "mode": "full" if mode.startswith("Full") else "append", "date_format": date_fmt, "header_map": hm}
                 resp = requests.post(api_base.rstrip("/") + "/ingest/url", json=payload, timeout=900)
                 if resp.status_code == 200:
                     data = resp.json()
-                    if data.get("ok"):
-                        st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')}")
-                        with st.expander("Preview (até 5 linhas) + Tipos inferidos", expanded=False):
-                            st.code("\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
-                            st.json(data.get("types", {}))
-                    else:
-                        st.error(f"Falhou: {data}")
+                    st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')}")
+                    with st.expander("Preview (até 5 linhas) + Mapeamento usado", expanded=False):
+                        st.code("\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
+                        # opcional: st.json(data)
                 else:
                     st.error(f"API respondeu {resp.status_code}: {resp.text}")
             except Exception as e:
@@ -115,9 +126,10 @@ with tab4:
 
 with tab5:
     st.subheader("Upload de CSV (até 64MB) – para arquivos pequenos")
-    st.caption("Para arquivos grandes, prefira a aba 'Importar por URL' para evitar OOM no Render Free.")
+    st.caption("Se os nomes das colunas diferirem, use 'header_map' (JSON). Ex.: {'data':'Data','cod_cliente':'Cód. Cliente'}")
     api_base_up = st.text_input("Base URL da API", value=DEFAULT_API, key="api_base_url_upload")
     uploaded = st.file_uploader("Escolha um arquivo .csv ou .csv.gz", type=["csv", "gz"], key="uploader_csv")
+    header_map_up = st.text_area("header_map (JSON opcional)", height=100, key="header_map_upload")
     mode_up = st.radio("Modo de carga (upload)", ["Full replace (TRUNCATE + INSERT)", "Append"], index=0, key="modo_upload")
     date_fmt_up = st.selectbox("Formato da data (upload)", ["YYYY-MM-DD", "DD/MM/YYYY"], index=0, key="datefmt_upload")
 
@@ -128,16 +140,15 @@ with tab5:
             try:
                 files = {"file": (uploaded.name, uploaded, "application/octet-stream")}
                 data = {"mode": "full" if mode_up.startswith("Full") else "append", "date_format": date_fmt_up}
+                hm = parse_header_map_json(header_map_up)
+                if hm is not None:
+                    data["header_map_json"] = json.dumps(hm, ensure_ascii=False)
                 resp = requests.post(api_base_up.rstrip("/") + "/ingest/upload", files=files, data=data, timeout=900)
                 if resp.status_code == 200:
                     data = resp.json()
-                    if data.get("ok"):
-                        st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')}")
-                        with st.expander("Preview (até 5 linhas) + Tipos inferidos", expanded=False):
-                            st.code("\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
-                            st.json(data.get("types", {}))
-                    else:
-                        st.error(f"Falhou: {data}")
+                    st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')}")
+                    with st.expander("Preview (até 5 linhas) + Mapeamento usado", expanded=False):
+                        st.code("\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
                 else:
                     st.error(f"API respondeu {resp.status_code}: {resp.text}")
             except Exception as e:
