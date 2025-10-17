@@ -16,6 +16,10 @@ services:
         value: "1"
       - key: DATABASE_URL
         sync: false
+      - key: DBT_RUNNER_URL
+        value: https://dbt-runner-phuo.onrender.com
+      - key: DBT_RUNNER_TOKEN
+        value: ad304844f1f9d338313cf4012511c412
 
   - type: web
     name: engajamento-dashboard
@@ -37,7 +41,3 @@ services:
         sync: false
       - key: API_BASE_URL
         value: https://engajamento-api.onrender.com
-      - key: DBT_RUNNER_URL
-        sync: false
-      - key: DBT_RUNNER_TOKEN
-        sync: false

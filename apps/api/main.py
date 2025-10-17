@@ -6,6 +6,9 @@ import psycopg
 from psycopg.rows import dict_row
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+DBT_RUNNER_URL = os.getenv("DBT_RUNNER_URL")
+DBT_RUNNER_TOKEN = os.getenv("DBT_RUNNER_TOKEN")
+
 app = FastAPI(title="B2B Engajamento API")
 
 def get_conn():
@@ -201,3 +204,23 @@ async def ingest_upload(
         try:
             if in_path and os.path.exists(in_path): os.remove(in_path)
         except Exception: pass
+
+@app.post("/dbt/run")
+def dbt_run():
+    if not DBT_RUNNER_URL:
+        raise HTTPException(status_code=500, detail="DBT_RUNNER_URL não configurado na API")
+    try:
+        headers = {"X-Token": DBT_RUNNER_TOKEN} if DBT_RUNNER_TOKEN else {}
+        r = requests.post(DBT_RUNNER_URL.rstrip("/") + "/dbt/build", headers=headers, timeout=900)
+        payload = {"ok": r.ok, "status": r.status_code}
+        try:
+            j = r.json()
+            if isinstance(j, dict):
+                payload["tail"] = j.get("tail")
+            else:
+                payload["raw"] = j
+        except Exception:
+            payload["text"] = r.text[:5000]
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Falha ao acionar DBT runner: {e}")

@@ -5,7 +5,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 st.set_page_config(page_title="Engajamento B2B", layout="wide")
-st.title("📊 Engajamento B2B – v3 PRO (URL & Upload, Autodetect, DBT Trigger)")
+st.title("📊 Engajamento B2B – v3 PRO (URL & Upload, Autodetect, DBT Trigger via API)")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -22,8 +22,8 @@ def run_query(sql, params=None):
             rows = cur.fetchall()
             return pd.DataFrame(rows)
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["Visão Geral", "Clientes (RFM)", "Explorar Vendas", "Importar por URL", "Upload CSV"]
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    ["Visão Geral", "Clientes (RFM)", "Explorar Vendas", "Importar por URL", "Upload CSV", "DBT"]
 )
 
 with tab1:
@@ -143,22 +143,23 @@ with tab5:
             except Exception as e:
                 st.exception(e)
 
-st.divider()
-st.subheader("DBT Runner")
-st.caption("Dispare o `dbt build` manualmente após a ingestão.")
-colA, colB = st.columns(2)
-with colA:
-    dbt_url = st.text_input("DBT Runner URL", value=os.getenv("DBT_RUNNER_URL", ""), key="dbt_runner_url")
-with colB:
-    dbt_token = st.text_input("DBT Runner Token (X-Token)", type="password", value=os.getenv("DBT_RUNNER_TOKEN", ""), key="dbt_runner_token")
-
-if st.button("Rodar dbt build agora", key="btn_dbt_build"):
-    if not dbt_url:
-        st.warning("Informe a URL do dbt-runner.")
-    else:
-        try:
-            headers = {"X-Token": dbt_token} if dbt_token else {}
-            r = requests.post(dbt_url.rstrip("/") + "/dbt/build", headers=headers, timeout=240)
-            st.code((r.json().get("tail","") or "")[-2000:], language="bash")
-        except Exception as e:
-            st.exception(e)
+with tab6:
+    st.subheader("DBT – Build via API")
+    st.caption("Aciona o DBT Runner através da API (sem expor token no front).")
+    api_base_dbt = st.text_input("Base URL da API", value=DEFAULT_API, key="api_base_url_dbt")
+    if st.button("Rodar dbt build (API)", key="btn_dbt_via_api"):
+        if not api_base_dbt:
+            st.error("Preencha a API Base URL")
+        else:
+            try:
+                r = requests.post(api_base_dbt.rstrip("/") + "/dbt/run", timeout=600)
+                if r.status_code == 200:
+                    j = r.json()
+                    tail = j.get("tail") or j.get("text") or str(j)
+                    st.code(str(tail)[-2000:], language="bash")
+                    if not j.get("ok", False):
+                        st.warning(f"dbt runner respondeu status {j.get('status')}")
+                else:
+                    st.error(f"API respondeu {r.status_code}: {r.text}")
+            except Exception as e:
+                st.exception(e)
