@@ -1,3 +1,4 @@
+
 import os, tempfile, csv, gzip, re, json
 from typing import Dict, Any, Optional, List, Tuple
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
@@ -101,7 +102,7 @@ def _open_text_reader(path, detected=None):
         return f, csv.reader(f, dialect=detected)
     return f, csv.reader(f)
 
-def build_alias_map(header: List[str]) -> Tuple[Dict[str,int], Dict[str,str]]:
+def build_alias_map(header: List[str]):
     norm = {slug(h): i for i, h in enumerate(header)}
     matched = {}
     matched_name = {}
@@ -114,7 +115,7 @@ def build_alias_map(header: List[str]) -> Tuple[Dict[str,int], Dict[str,str]]:
                 break
     return matched, matched_name
 
-def apply_user_header_map(header: List[str], header_map: Optional[Dict[str,str]]) -> Dict[str,int]:
+def apply_user_header_map(header: List[str], header_map: Optional[Dict[str,str]]):
     if not header_map:
         return {}
     norm_index = {slug(h): i for i,h in enumerate(header)}
@@ -130,7 +131,7 @@ def apply_user_header_map(header: List[str], header_map: Optional[Dict[str,str]]
         out[req_col] = idx
     return out
 
-def process_to_filtered_csv(in_path: str, date_format: str, header_map: Optional[Dict[str,str]]) -> Dict[str, Any]:
+def process_to_filtered_csv(in_path: str, date_format: str, header_map: Optional[Dict[str,str]]):
     if in_path.endswith(".gz"):
         with gzip.open(in_path, "rt", encoding="utf-8", newline="") as ftxt:
             sample_text = ftxt.read(10000)
@@ -202,25 +203,32 @@ def process_to_filtered_csv(in_path: str, date_format: str, header_map: Optional
 
 def copy_into_db(out_path: str, mode: str):
     with get_conn() as conn:
-        with conn.cursor() as cur:
-            if mode.lower().startswith("full"):
-                try:
-                    cur.execute(f'TRUNCATE TABLE {STAGING_TABLE};')
-                except Exception as e:
-                    if FALLBACK_DELETE:
-                        cur.execute(f'DELETE FROM {STAGING_TABLE};')
-                    else:
-                        raise
-            copy_sql = f"""
-            COPY {STAGING_TABLE}
-            (data,produto,sku,familia,sub_familia,cor,tam,marca,
-             cod_cliente,razao_social,qtde,preco_unit,total_venda,
-             total_custo,margem,documento_fiscal)
-            FROM STDIN WITH (FORMAT csv, HEADER true)
-            """
-            with open(out_path, "r", encoding="utf-8") as fcsv:
-                cur.copy(copy_sql, fcsv)
-        conn.commit()
+        # iniciamos uma transação; em caso de erro no TRUNCATE, precisamos de rollback
+        try:
+            with conn.cursor() as cur:
+                if mode.lower().startswith("full"):
+                    try:
+                        cur.execute(f'TRUNCATE TABLE {STAGING_TABLE};')
+                    except Exception as e:
+                        if FALLBACK_DELETE:
+                            conn.rollback()  # limpa estado de erro
+                            with conn.cursor() as cur2:
+                                cur2.execute(f'DELETE FROM {STAGING_TABLE};')
+                        else:
+                            raise
+                copy_sql = f"""
+                COPY {STAGING_TABLE}
+                (data,produto,sku,familia,sub_familia,cor,tam,marca,
+                 cod_cliente,razao_social,qtde,preco_unit,total_venda,
+                 total_custo,margem,documento_fiscal)
+                FROM STDIN WITH (FORMAT csv, HEADER true)
+                """
+                with open(out_path, "r", encoding="utf-8") as fcsv:
+                    cur.copy(copy_sql, fcsv)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
 @app.post("/ingest/url")
 def ingest_from_url(

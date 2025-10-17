@@ -6,7 +6,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 st.set_page_config(page_title="Engajamento B2B", layout="wide")
-st.title("📊 Engajamento B2B – v5 (fallback delete, tabela staging configurável)")
+st.title("📊 Engajamento B2B – v5.2 (rollback seguro no TRUNCATE->DELETE)")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
