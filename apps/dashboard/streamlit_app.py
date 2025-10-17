@@ -6,7 +6,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 st.set_page_config(page_title="Engajamento B2B", layout="wide")
-st.title("📊 Engajamento B2B – v4 (aliases de header, URL & Upload, DBT via API)")
+st.title("📊 Engajamento B2B – v5 (fallback delete, tabela staging configurável)")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -98,11 +98,11 @@ def parse_header_map_json(txt):
 
 with tab4:
     st.subheader("Importar por URL (CSV/CSV.GZ) – recomendado p/ arquivos grandes")
-    st.caption("Se os nomes das colunas diferirem, use o campo 'header_map' para mapear. Exemplo: {'data':'Data','cod_cliente':'Cód. Cliente'}")
+    st.caption("Use header_map se os nomes de colunas forem diferentes.")
     api_base = st.text_input("Base URL da API", value=DEFAULT_API, key="api_base_url_url")
     csv_url = st.text_input("URL do arquivo (csv ou csv.gz)", key="csv_url_field")
     header_map_txt = st.text_area("header_map (JSON opcional)", height=100, key="header_map_url")
-    mode = st.radio("Modo de carga", ["Full replace (TRUNCATE + INSERT)", "Append"], index=0, key="modo_url")
+    mode = st.radio("Modo de carga", ["Full replace (TRUNCATE/DELETE + INSERT)", "Append"], index=0, key="modo_url")
     date_fmt = st.selectbox("Formato da data (coluna 'data')", ["YYYY-MM-DD", "DD/MM/YYYY"], index=0, key="datefmt_url")
 
     if st.button("Importar do URL", key="btn_import_url"):
@@ -115,10 +115,9 @@ with tab4:
                 resp = requests.post(api_base.rstrip("/") + "/ingest/url", json=payload, timeout=900)
                 if resp.status_code == 200:
                     data = resp.json()
-                    st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')}")
-                    with st.expander("Preview (até 5 linhas) + Mapeamento usado", expanded=False):
+                    st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')} | Staging: {data.get('staging_table')}")
+                    with st.expander("Preview (até 5 linhas)", expanded=False):
                         st.code("\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
-                        # opcional: st.json(data)
                 else:
                     st.error(f"API respondeu {resp.status_code}: {resp.text}")
             except Exception as e:
@@ -126,11 +125,10 @@ with tab4:
 
 with tab5:
     st.subheader("Upload de CSV (até 64MB) – para arquivos pequenos")
-    st.caption("Se os nomes das colunas diferirem, use 'header_map' (JSON). Ex.: {'data':'Data','cod_cliente':'Cód. Cliente'}")
     api_base_up = st.text_input("Base URL da API", value=DEFAULT_API, key="api_base_url_upload")
     uploaded = st.file_uploader("Escolha um arquivo .csv ou .csv.gz", type=["csv", "gz"], key="uploader_csv")
     header_map_up = st.text_area("header_map (JSON opcional)", height=100, key="header_map_upload")
-    mode_up = st.radio("Modo de carga (upload)", ["Full replace (TRUNCATE + INSERT)", "Append"], index=0, key="modo_upload")
+    mode_up = st.radio("Modo de carga (upload)", ["Full replace (TRUNCATE/DELETE + INSERT)", "Append"], index=0, key="modo_upload")
     date_fmt_up = st.selectbox("Formato da data (upload)", ["YYYY-MM-DD", "DD/MM/YYYY"], index=0, key="datefmt_upload")
 
     if st.button("Enviar upload", key="btn_upload"):
@@ -146,8 +144,8 @@ with tab5:
                 resp = requests.post(api_base_up.rstrip("/") + "/ingest/upload", files=files, data=data, timeout=900)
                 if resp.status_code == 200:
                     data = resp.json()
-                    st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')}")
-                    with st.expander("Preview (até 5 linhas) + Mapeamento usado", expanded=False):
+                    st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')} | Staging: {data.get('staging_table')}")
+                    with st.expander("Preview (até 5 linhas)", expanded=False):
                         st.code("\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
                 else:
                     st.error(f"API respondeu {resp.status_code}: {resp.text}")
@@ -169,7 +167,7 @@ with tab6:
                     tail = j.get("tail") or j.get("text") or str(j)
                     st.code(str(tail)[-2000:], language="bash")
                     if not j.get("ok", False):
-                        st.warning(f"dbt runner respondeu status {j.get('status')}")
+                        st.warning(f"dbt runner respondeu status {j.get('status']}")
                 else:
                     st.error(f"API respondeu {r.status_code}: {r.text}")
             except Exception as e:

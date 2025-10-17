@@ -9,6 +9,8 @@ from unidecode import unidecode
 DATABASE_URL = os.getenv("DATABASE_URL")
 DBT_RUNNER_URL = os.getenv("DBT_RUNNER_URL")
 DBT_RUNNER_TOKEN = os.getenv("DBT_RUNNER_TOKEN")
+STAGING_TABLE = os.getenv("STAGING_TABLE", "staging.raw_vendas_achatado")
+FALLBACK_DELETE = os.getenv("FALLBACK_DELETE_ON_TRUNCATE_ERROR", "true").lower() in ("1","true","yes","y")
 
 app = FastAPI(title="B2B Engajamento API")
 
@@ -22,7 +24,7 @@ def get_conn():
 
 @app.get("/health")
 def health():
-    return {"status":"ok"}
+    return {"status":"ok","staging_table":STAGING_TABLE,"fallback_delete":FALLBACK_DELETE}
 
 REQ_COLS = ["data","produto","sku","familia","sub_familia","cor","tam","marca",
             "cod_cliente","razao_social","qtde","preco_unit","total_venda",
@@ -99,7 +101,7 @@ def _open_text_reader(path, detected=None):
         return f, csv.reader(f, dialect=detected)
     return f, csv.reader(f)
 
-def build_alias_map(header):
+def build_alias_map(header: List[str]) -> Tuple[Dict[str,int], Dict[str,str]]:
     norm = {slug(h): i for i, h in enumerate(header)}
     matched = {}
     matched_name = {}
@@ -112,7 +114,7 @@ def build_alias_map(header):
                 break
     return matched, matched_name
 
-def apply_user_header_map(header, header_map):
+def apply_user_header_map(header: List[str], header_map: Optional[Dict[str,str]]) -> Dict[str,int]:
     if not header_map:
         return {}
     norm_index = {slug(h): i for i,h in enumerate(header)}
@@ -128,7 +130,7 @@ def apply_user_header_map(header, header_map):
         out[req_col] = idx
     return out
 
-def process_to_filtered_csv(in_path: str, date_format: str, header_map):
+def process_to_filtered_csv(in_path: str, date_format: str, header_map: Optional[Dict[str,str]]) -> Dict[str, Any]:
     if in_path.endswith(".gz"):
         with gzip.open(in_path, "rt", encoding="utf-8", newline="") as ftxt:
             sample_text = ftxt.read(10000)
@@ -195,15 +197,22 @@ def process_to_filtered_csv(in_path: str, date_format: str, header_map):
             if count % 50000 == 0:
                 tmp_out.flush()
 
-    return {"out_path": out_path, "header": header, "preview": preview, "count": count, "dialect": getattr(dialect,'__name__', str(dialect))}
+    return {"out_path": out_path, "header": header, "preview": preview, "count": count, "dialect": getattr(dialect,'__name__', str(dialect)),
+            "staging_table": STAGING_TABLE}
 
 def copy_into_db(out_path: str, mode: str):
     with get_conn() as conn:
         with conn.cursor() as cur:
             if mode.lower().startswith("full"):
-                cur.execute('TRUNCATE TABLE staging.raw_vendas_achatado;')
-            copy_sql = """
-            COPY staging.raw_vendas_achatado
+                try:
+                    cur.execute(f'TRUNCATE TABLE {STAGING_TABLE};')
+                except Exception as e:
+                    if FALLBACK_DELETE:
+                        cur.execute(f'DELETE FROM {STAGING_TABLE};')
+                    else:
+                        raise
+            copy_sql = f"""
+            COPY {STAGING_TABLE}
             (data,produto,sku,familia,sub_familia,cor,tam,marca,
              cod_cliente,razao_social,qtde,preco_unit,total_venda,
              total_custo,margem,documento_fiscal)
@@ -238,7 +247,8 @@ def ingest_from_url(
         out_path = proc["out_path"]
         copy_into_db(out_path, mode)
         return {"ok": True, "rows": proc["count"], "mode": mode, "date_format": date_format,
-                "dialect": proc["dialect"], "preview_header": proc["header"], "preview_rows": proc["preview"]}
+                "dialect": proc["dialect"], "preview_header": proc["header"], "preview_rows": proc["preview"],
+                "staging_table": proc["staging_table"]}
     finally:
         try:
             if out_path and os.path.exists(out_path): os.remove(out_path)
@@ -252,7 +262,7 @@ async def ingest_upload(
     file: UploadFile = File(...),
     mode: str = Form("full"),
     date_format: str = Form("YYYY-MM-DD"),
-    header_map_json: Optional[str] = Form(None)
+    header_map_json: Optional[str] = Form(None, description="JSON com mapeamento: {'data':'Data','sku':'SKU',...}")
 ):
     header_map = None
     if header_map_json:
@@ -280,7 +290,8 @@ async def ingest_upload(
         out_path = proc["out_path"]
         copy_into_db(out_path, mode)
         return {"ok": True, "rows": proc["count"], "mode": mode, "date_format": date_format,
-                "dialect": proc["dialect"], "preview_header": proc["header"], "preview_rows": proc["preview"]}
+                "dialect": proc["dialect"], "preview_header": proc["header"], "preview_rows": proc["preview"],
+                "staging_table": proc["staging_table"]}
     finally:
         try:
             if out_path and os.path.exists(out_path): os.remove(out_path)
