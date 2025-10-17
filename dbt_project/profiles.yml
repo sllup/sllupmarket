@@ -11,5 +11,5 @@ b2b_profile:
       schema: "{{ env_var('DBT_SCHEMA', 'SllupMarket') }}"
       threads: "{{ env_var('DBT_THREADS', '4') | int }}"
       connect_timeout: 30
-      search_path: ["SllupMarket", "public"]
+      search_path: "{{ env_var('DBT_SEARCH_PATH', 'SllupMarket,public') }}"
   target: dev
