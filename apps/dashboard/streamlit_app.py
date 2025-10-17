@@ -167,7 +167,7 @@ with tab6:
                     tail = j.get("tail") or j.get("text") or str(j)
                     st.code(str(tail)[-2000:], language="bash")
                     if not j.get("ok", False):
-                        st.warning(f"dbt runner respondeu status {j.get('status']}")
+                        st.warning(f"dbt runner respondeu status {j.get('status')}")
                 else:
                     st.error(f"API respondeu {r.status_code}: {r.text}")
             except Exception as e:
