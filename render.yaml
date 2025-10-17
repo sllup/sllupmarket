@@ -17,7 +17,7 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: DBT_RUNNER_URL
-        value: LOCAL
+        value: https://dbt-runner-phuo.onrender.com
       - key: DBT_RUNNER_TOKEN
         value: ad304844f1f9d338313cf4012511c412
       - key: STAGING_TABLE
