@@ -19,11 +19,24 @@ services:
         sync: false
       - key: DBT_RUNNER_URL
         value: LOCAL
+      - key: DBT_HOST
+        sync: false
+      - key: DBT_PORT
+        value: "5432"
+      - key: DBT_DBNAME
+        sync: false
+      - key: DBT_USER
+        sync: false
+      - key: DBT_PASSWORD
+        sync: false
+      - key: DBT_SCHEMA
+        value: SllupMarket
+      - key: DBT_THREADS
+        value: "4"
       - key: STAGING_TABLE
         value: staging.raw_vendas_achatado
       - key: FALLBACK_DELETE_ON_TRUNCATE_ERROR
         value: "true"
-
   - type: web
     name: engajamento-dashboard
     env: python

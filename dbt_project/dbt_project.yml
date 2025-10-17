@@ -1,7 +1,19 @@
-name: b2b_engajamento
-version: 1.0.0
-profile: b2b_profile
+
+name: 'b2b_engajamento'
+version: '1.0.0'
+config-version: 2
+profile: 'b2b_profile'
 model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+macro-paths: ["macros"]
 models:
-  b2b_engajamento:
-    +materialized: view
+  +materialized: table
+  staging:
+    +schema: staging
+  core:
+    +schema: core
+  marts:
+    +schema: marts

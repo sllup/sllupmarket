@@ -1,12 +1,15 @@
+
 b2b_profile:
-  target: dev
   outputs:
     dev:
       type: postgres
-      host: ${DBT_HOST}
-      user: ${DBT_USER}
-      password: ${DBT_PASSWORD}
-      port: ${DBT_PORT}
-      dbname: ${DBT_DBNAME}
-      schema: "SllupMarket"
-      sslmode: ${DBT_SSLMODE}
+      host: "{{ env_var('DBT_HOST') }}"
+      user: "{{ env_var('DBT_USER') }}"
+      password: "{{ env_var('DBT_PASSWORD') }}"
+      port: "{{ env_var('DBT_PORT', '5432') | int }}"
+      dbname: "{{ env_var('DBT_DBNAME') }}"
+      schema: "{{ env_var('DBT_SCHEMA', 'SllupMarket') }}"
+      threads: "{{ env_var('DBT_THREADS', '4') | int }}"
+      connect_timeout: 30
+      search_path: ["SllupMarket", "public"]
+  target: dev
