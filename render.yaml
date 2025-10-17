@@ -33,7 +33,6 @@ services:
         value: SllupMarket
       - key: DBT_SEARCH_PATH
         value: SllupMarket,public
-        value: SllupMarket
       - key: DBT_THREADS
         value: "4"
       - key: STAGING_TABLE
