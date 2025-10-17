@@ -1,5 +1,6 @@
 
-import os, tempfile, csv, gzip, re, json
+# API v6.0 – LOCAL dbt + ingest + aliases
+import os, tempfile, csv, gzip, re, json, subprocess, shlex
 from typing import Dict, Any, Optional, List
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
 import requests
@@ -7,13 +8,14 @@ import psycopg
 from psycopg.rows import dict_row
 from unidecode import unidecode
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATABASE_URL = os.getenv("DATABASE_URL")
-DBT_RUNNER_URL = os.getenv("DBT_RUNNER_URL")
+DBT_RUNNER_URL = os.getenv("DBT_RUNNER_URL")  # Use 'LOCAL' para rodar dbt dentro da API
 DBT_RUNNER_TOKEN = os.getenv("DBT_RUNNER_TOKEN")
 STAGING_TABLE = os.getenv("STAGING_TABLE", "staging.raw_vendas_achatado")
 FALLBACK_DELETE = os.getenv("FALLBACK_DELETE_ON_TRUNCATE_ERROR", "true").lower() in ("1","true","yes","y")
 
-app = FastAPI(title="B2B Engajamento API v5.7")
+app = FastAPI(title="Engajamento API v6.0 (LOCAL dbt)")
 
 def get_conn():
     if not DATABASE_URL:
@@ -25,9 +27,14 @@ def get_conn():
 
 @app.get("/health")
 def health():
-    return {"status":"ok","staging_table":STAGING_TABLE,"fallback_delete":FALLBACK_DELETE,"dbt_runner_url": DBT_RUNNER_URL}
+    return {
+        "status":"ok",
+        "staging_table":STAGING_TABLE,
+        "fallback_delete":FALLBACK_DELETE,
+        "dbt_runner_url": DBT_RUNNER_URL or "LOCAL"
+    }
 
-# ------- Ingest helpers (same as v5.6, omitted for brevity in this cell) -------
+# ---------------- Ingest helpers ----------------
 REQ_COLS = ["data","produto","sku","familia","sub_familia","cor","tam","marca","cod_cliente","razao_social","qtde","preco_unit","total_venda","total_custo","margem","documento_fiscal"]
 ALIASES = {
     "data": ["data","dt","data_venda","dt_venda","date","dt_emissao","emissao","data_emissao"],
@@ -49,11 +56,13 @@ ALIASES = {
 }
 NUMERIC_COLS = {"qtde","preco_unit","total_venda","total_custo","margem"}
 decimal_re = re.compile(r"^-?\d{1,3}(\.\d{3})*,\d+$|^-?\d+,\d+$")
+
 def normalize_decimal(val: str) -> str:
     if val is None or val == "": return val
     s = val.strip()
     if decimal_re.match(s): s = s.replace(".", "").replace(",", ".")
     return s
+
 def slug(s: str) -> str:
     s = unidecode((s or "").strip().lower()); out=[]; prev=False
     for ch in s:
@@ -63,6 +72,7 @@ def slug(s: str) -> str:
     res="".join(out).strip("_")
     while "__" in res: res=res.replace("__","_")
     return res
+
 def detect_dialect(sample_text: str):
     try:
         import csv as _csv; sniffer=_csv.Sniffer()
@@ -73,18 +83,21 @@ def detect_dialect(sample_text: str):
                 delimiter=";"; quotechar='"'; doublequote=True; skipinitialspace=True; lineterminator="\n"; quoting=csv.QUOTE_MINIMAL
             return Semi
         else: return csv.excel
+
 def _open_text_reader(path, detected=None):
     if path.endswith(".gz"): f=gzip.open(path, mode="rt", encoding="utf-8", newline="")
     else: f=open(path, mode="rt", encoding="utf-8", newline="")
     if detected: return f, csv.reader(f, dialect=detected)
     return f, csv.reader(f)
+
 def build_alias_map(header: List[str]):
     norm={slug(h):i for i,h in enumerate(header)}; matched={}
-    for req,alist in ALIASES.items():
+    for req, alist in ALIASES.items():
         for a in alist:
             key=slug(a)
             if key in norm: matched[req]=norm[key]; break
     return matched
+
 def apply_user_header_map(header: List[str], header_map: Optional[Dict[str,str]]):
     if not header_map: return {}
     norm_index={slug(h):i for i,h in enumerate(header)}; out={}
@@ -94,8 +107,10 @@ def apply_user_header_map(header: List[str], header_map: Optional[Dict[str,str]]
         if idx is None: raise HTTPException(status_code=400, detail=f"header_map aponta '{provided_name}' que não existe no CSV")
         out[req_col]=idx
     return out
+
 def process_to_filtered_csv(in_path: str, date_format: str, header_map: Optional[Dict[str,str]]):
-    if in_path.endswith(".gz"): ftxt=gzip.open(in_path,"rt",encoding="utf-8",newline=""); sample_text=ftxt.read(10000); ftxt.close()
+    if in_path.endswith(".gz"):
+        with gzip.open(in_path,"rt",encoding="utf-8",newline="") as ftxt: sample_text=ftxt.read(10000)
     else:
         with open(in_path,"rt",encoding="utf-8",newline="") as ftxt: sample_text=ftxt.read(10000)
     dialect=detect_dialect(sample_text)
@@ -129,6 +144,7 @@ def process_to_filtered_csv(in_path: str, date_format: str, header_map: Optional
             w.writerow([r[c] for c in REQ_COLS]); count+=1
             if count%50000==0: tmp_out.flush()
     return {"out_path":out_path,"header":header,"preview":preview,"count":count,"dialect":getattr(dialect,'__name__',str(dialect)),"staging_table":STAGING_TABLE}
+
 def copy_into_db(out_path: str, mode: str):
     with get_conn() as conn:
         try:
@@ -216,70 +232,30 @@ async def ingest_file_alias(file: UploadFile = File(...), mode: str = Form("full
 async def api_ingest_upload_alias(file: UploadFile = File(...), mode: str = Form("full"), date_format: str = Form("YYYY-MM-DD"), header_map_json: Optional[str] = Form(None)):
     return await ingest_upload(file=file, mode=mode, date_format=date_format, header_map_json=header_map_json)
 
-# ---------- DBT autodiscovery v2 (reads openapi.json to derive paths) ----------
-def _dbt_headers_variants():
-    vs=[]
-    if DBT_RUNNER_TOKEN:
-        vs.append({"X-Token": DBT_RUNNER_TOKEN})
-        vs.append({"Authorization": f"Bearer {DBT_RUNNER_TOKEN}"})
-        vs.append({"X-API-Key": DBT_RUNNER_TOKEN})
-    vs.append({})
-    return vs
-
-def _dbt_payload_variants():
-    return [
-        ({"Content-Type":"application/json"}, {}),
-        ({"Content-Type":"application/json"}, {"action":"build"}),
-        ({"Content-Type":"application/json"}, {"cmd":"dbt build"}),
-        ({}, {}),
-    ]
-
-def _fetch_openapi_paths(base: str):
-    paths=[]
-    for path in ["/openapi.json","/docs/openapi.json","/api/openapi.json","/v1/openapi.json"]:
-        try:
-            r=requests.get(base.rstrip("/")+path,timeout=10)
-            if r.ok:
-                j=r.json()
-                if isinstance(j, dict) and "paths" in j:
-                    paths = list(j["paths"].keys())
-                    if paths: return paths
-        except Exception:
-            pass
-    return []
+# ---------------- LOCAL DBT ----------------
+def _dbt_env():
+    env = os.environ.copy()
+    return env
 
 @app.post("/dbt/run")
-def dbt_run():
-    if not DBT_RUNNER_URL:
-        raise HTTPException(status_code=500, detail="DBT_RUNNER_URL não configurado na API")
-    base = DBT_RUNNER_URL.rstrip("/")
-    tried=[]
-    # Candidates from openapi.json if available
-    dyn_paths = _fetch_openapi_paths(base)
-    api_guess = [p for p in dyn_paths if any(k in p.lower() for k in ["build","run"])]
-    # Static candidates
-    static = ["/dbt/build","/dbt/run","/build","/run","/api/dbt/build","/api/build","/v1/build","/v1/run","/-/build","/-/run"]
-    candidates = api_guess + static
-    last=None
-    for path in candidates:
-        url = base + path
-        for hdr_auth in _dbt_headers_variants():
-            for hdr_ct, body in _dbt_payload_variants():
-                headers = {**hdr_ct, **hdr_auth}
-                try:
-                    r = requests.post(url, headers=headers, json=body if hdr_ct.get("Content-Type")=="application/json" else None, timeout=900)
-                    meta={"url":url,"headers":list(headers.keys()),"status":r.status_code,"body":None}
-                    try: j=r.json()
-                    except Exception: j=None
-                    if r.ok:
-                        resp={"ok":True,"status":r.status_code,"used_url":url,"used_headers":list(headers.keys())}
-                        if j: resp["tail"] = j.get("tail") or j
-                        else: resp["text"]=r.text[:5000]
-                        return resp
-                    else:
-                        meta["body"] = (j if j else r.text[:500])
-                        tried.append(meta); last=(r.status_code, meta["body"])
-                except Exception as e:
-                    tried.append({"url":url,"headers":list(headers.keys()),"error":str(e)}); last=(0,str(e))
-    detail={"message":"Nenhum endpoint DBT aceitou a chamada","tried":tried[-10:]}
-    raise HTTPException(status_code=404 if (last and isinstance(last[0], int) and last[0]==404) else 502, detail=detail)
+def dbt_run_local():
+    # Força local a não ser que explicitamente configure outro valor diferente de 'LOCAL'
+    if DBT_RUNNER_URL and DBT_RUNNER_URL.strip().upper() != "LOCAL":
+        raise HTTPException(status_code=404, detail={"message": "Runner externo não suportado nesta build. Defina DBT_RUNNER_URL=LOCAL."})
+    proj = os.path.join(ROOT_DIR, "dbt_project")
+    if not os.path.isdir(proj):
+        raise HTTPException(status_code=500, detail="Diretório dbt_project não encontrado no deploy")
+    logs = []
+    for cmd in ["dbt deps", "dbt build --fail-fast"]:
+        logs.append(f"$ {cmd}")
+        try:
+            import subprocess, shlex
+            p = subprocess.Popen(shlex.split(cmd), cwd=proj, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=_dbt_env(), text=True)
+            for line in p.stdout:
+                logs.append(line.rstrip())
+            code = p.wait()
+            if code != 0:
+                return {"ok": False, "step": cmd, "exit_code": code, "tail": "\n".join(logs[-400:])}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Falha ao executar '{cmd}': {e}")
+    return {"ok": True, "tail": "\n".join(logs[-400:])}

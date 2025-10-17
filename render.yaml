@@ -1,3 +1,4 @@
+
 services:
   - type: web
     name: engajamento-api
@@ -17,9 +18,7 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: DBT_RUNNER_URL
-        value: https://dbt-runner-phuo.onrender.com
-      - key: DBT_RUNNER_TOKEN
-        value: ad304844f1f9d338313cf4012511c412
+        value: LOCAL
       - key: STAGING_TABLE
         value: staging.raw_vendas_achatado
       - key: FALLBACK_DELETE_ON_TRUNCATE_ERROR

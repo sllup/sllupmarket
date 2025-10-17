@@ -6,25 +6,10 @@ import psycopg
 from psycopg.rows import dict_row
 
 st.set_page_config(page_title="Engajamento B2B", layout="wide")
-st.title("📊 Engajamento B2B – v5.6 (rotas alias + ajuda 404)")
+st.title("📊 Engajamento B2B – v6.0 (LOCAL dbt)")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 DEFAULT_API = os.getenv("API_BASE_URL", "https://engajamento-api.onrender.com")
-
-def show_404_help(api_base: str):
-    st.error("404 na API. Buscando rotas disponíveis…")
-    try:
-        r = requests.get(api_base.rstrip("/") + "/openapi.json", timeout=15)
-        if r.status_code == 200:
-            paths = r.json().get("paths", {})
-            st.caption("Rotas encontradas na API:")
-            for p in list(paths.keys())[:50]:
-                st.code(p, language="bash")
-            st.info("Esta API também aceita aliases: `/upload`, `/ingest/file`, `/api/ingest/upload`.")
-        else:
-            st.caption(f"openapi.json retornou {r.status_code}: {r.text[:300]}")
-    except Exception as e:
-        st.caption(f"Falha ao ler openapi.json: {e}")
 
 def check_db():
     try:
@@ -48,25 +33,20 @@ def check_api(base):
         return False, str(e)
 
 st.markdown("### 🔌 Status")
-c1, c2, c3 = st.columns([1,2,2])
-
 ok_db, info_db = check_db()
+c1, c2, c3 = st.columns([1,2,2])
 c1.metric("Postgres", "OK" if ok_db else "Falhou")
-if not ok_db:
-    c1.caption(str(info_db))
+if not ok_db: c1.caption(str(info_db))
 
 api_base = st.text_input("Base URL da API", value=DEFAULT_API, key="api_base_status")
 ok_api, info_api = check_api(api_base)
 c2.metric("API /health", "OK" if ok_api else "Falhou")
 if ok_api and isinstance(info_api, dict):
-    c2.caption(f"staging_table: {info_api.get('staging_table')} | fallback_delete: {info_api.get('fallback_delete')}")
+    c2.caption(f"staging_table: {info_api.get('staging_table')} | fallback_delete: {info_api.get('fallback_delete')} | dbt: {info_api.get('dbt_runner_url')}")
 else:
     c2.caption(str(info_api))
 
-runner = info_api.get("dbt_runner_url") if (ok_api and isinstance(info_api, dict)) else None
-c3.metric("DBT Runner URL", "configurado" if runner else "vazio")
-if runner:
-    c3.caption(runner)
+c3.write("Use as abas abaixo para ingestão, exploração e DBT.")
 
 st.divider()
 
@@ -95,7 +75,7 @@ with tab1:
               (select count(*) from dim_cliente) as clientes,
               (select count(*) from dim_produto) as skus,
               (select count(*) from fato_venda)  as vendas
-        """)
+        """);
         c1, c2, c3 = st.columns(3)
         c1.metric("Clientes", int(df_counts.iloc[0]["clientes"]))
         c2.metric("SKUs", int(df_counts.iloc[0]["skus"]))
@@ -113,7 +93,7 @@ with tab2:
             from mart_rfm
             order by rfm_score desc
             limit 200
-        """)
+        """);
         st.dataframe(df_rfm, use_container_width=True)
         cod = st.text_input("Buscar cliente (cod_cliente)", key="rfm_busca_cod")
         if cod:
@@ -123,7 +103,7 @@ with tab2:
                 from dim_cliente c
                 left join rfm on rfm.cod_cliente = c.cod_cliente
                 where c.cod_cliente = %s
-            """, (cod, cod))
+            """, (cod, cod));
             st.dataframe(df_v, use_container_width=True)
     except Exception as e:
         st.warning("⚠️ Não encontrei `mart_rfm`. Rode o dbt build no mesmo banco do dashboard.")
@@ -137,19 +117,17 @@ with tab3:
             from fato_venda
             order by data desc
             limit 500
-        """)
+        """);
         st.dataframe(df_vendas, use_container_width=True)
     except Exception as e:
         st.warning("Não foi possível carregar as vendas recentes. Verifique se `fato_venda` existe.")
         st.exception(e)
 
 def parse_header_map_json(txt):
-    if not txt:
-        return None
+    if not txt: return None
     try:
         j = json.loads(txt)
-        if isinstance(j, dict):
-            return j
+        if isinstance(j, dict): return j
         st.error("header_map deve ser um objeto JSON (ex.: {'data':'Data','sku':'SKU'})")
     except Exception as e:
         st.error(f"JSON inválido: {e}")
@@ -157,7 +135,6 @@ def parse_header_map_json(txt):
 
 with tab4:
     st.subheader("Importar por URL (CSV/CSV.GZ) – recomendado p/ arquivos grandes")
-    st.caption("Use header_map se os nomes de colunas forem diferentes.")
     api_base_url = st.text_input("Base URL da API", value=DEFAULT_API, key="api_base_url_url")
     csv_url = st.text_input("URL do arquivo (csv ou csv.gz)", key="csv_url_field")
     header_map_txt = st.text_area("header_map (JSON opcional)", height=100, key="header_map_url")
@@ -177,8 +154,6 @@ with tab4:
                     st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')} | Staging: {data.get('staging_table')}")
                     with st.expander("Preview (até 5 linhas)", expanded=False):
                         st.code("\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
-                elif resp.status_code == 404:
-                    show_404_help(api_base_url)
                 else:
                     st.error(f"API respondeu {resp.status_code}: {resp.text}")
             except Exception as e:
@@ -202,33 +177,22 @@ with tab5:
                 hm = parse_header_map_json(header_map_up)
                 if hm is not None:
                     data["header_map_json"] = json.dumps(hm, ensure_ascii=False)
-                # Try main path then aliases
-                paths = ["/ingest/upload", "/upload", "/ingest/file", "/api/ingest/upload"]
-                last = None
-                for p in paths:
+                for p in ["/ingest/upload", "/upload", "/ingest/file", "/api/ingest/upload"]:
                     resp = requests.post(api_base_up.rstrip("/") + p, files=files, data=data, timeout=900)
-                    last = resp
                     if resp.status_code == 200:
                         data = resp.json()
                         st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')} | Staging: {data.get('staging_table')} (via {p})")
                         with st.expander("Preview (até 5 linhas)", expanded=False):
                             st.code("\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
                         break
-                    elif resp.status_code == 404:
-                        continue
-                    else:
-                        st.error(f"API respondeu {resp.status_code} em {p}: {resp.text}")
-                        break
                 else:
-                    show_404_help(api_base_up)
-                    if last is not None:
-                        st.caption(f"Última resposta: {last.status_code} {last.text[:200]}")
+                    st.error("Nenhuma rota de upload funcionou (404). Verifique a API.")
             except Exception as e:
                 st.exception(e)
 
 with tab6:
-    st.subheader("DBT – Build via API (autodiscovery)")
-    st.caption("A API testa múltiplas rotas e headers; veja detalhes abaixo.")
+    st.subheader("DBT – Build local via API")
+    st.caption("A API executa 'dbt deps' e 'dbt build --fail-fast' dentro do diretório dbt_project.")
     api_base_dbt = st.text_input("Base URL da API", value=DEFAULT_API, key="api_base_url_dbt")
     colA, colB = st.columns([1,1])
     if colA.button("Ver /health da API", key="btn_health_api"):
@@ -237,12 +201,12 @@ with tab6:
             st.code(r.text, language="json")
         except Exception as e:
             st.exception(e)
-    if colB.button("Rodar dbt build (API)", key="btn_dbt_via_api"):
+    if colB.button("Rodar dbt build (LOCAL)", key="btn_dbt_via_api"):
         if not api_base_dbt:
             st.error("Preencha a API Base URL")
         else:
             try:
-                r = requests.post(api_base_dbt.rstrip("/") + "/dbt/run", timeout=900)
+                r = requests.post(api_base_dbt.rstrip("/") + "/dbt/run", timeout=1800)
                 st.write(f"Status: {r.status_code}")
                 st.code(r.text[:4000], language="json")
             except Exception as e:
