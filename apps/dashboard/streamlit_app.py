@@ -1,24 +1,38 @@
 
-import os, json, requests, time
+import os, json, requests
 import pandas as pd
 import streamlit as st
 import psycopg
 from psycopg.rows import dict_row
 
 st.set_page_config(page_title="Engajamento B2B", layout="wide")
-st.title("📊 Engajamento B2B – v5.5 (painel de status + abas completas)")
+st.title("📊 Engajamento B2B – v5.6 (rotas alias + ajuda 404)")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 DEFAULT_API = os.getenv("API_BASE_URL", "https://engajamento-api.onrender.com")
 
-# ===== Painel de Status =====
+def show_404_help(api_base: str):
+    st.error("404 na API. Buscando rotas disponíveis…")
+    try:
+        r = requests.get(api_base.rstrip("/") + "/openapi.json", timeout=15)
+        if r.status_code == 200:
+            paths = r.json().get("paths", {})
+            st.caption("Rotas encontradas na API:")
+            for p in list(paths.keys())[:50]:
+                st.code(p, language="bash")
+            st.info("Esta API também aceita aliases: `/upload`, `/ingest/file`, `/api/ingest/upload`.")
+        else:
+            st.caption(f"openapi.json retornou {r.status_code}: {r.text[:300]}")
+    except Exception as e:
+        st.caption(f"Falha ao ler openapi.json: {e}")
+
 def check_db():
     try:
         with psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10) as conn:
             with conn.cursor() as cur0:
                 cur0.execute('SET search_path TO "SllupMarket", public;')
             with conn.cursor() as cur:
-                cur.execute("select 1 as ok")
+                cur.execute("select 1")
                 cur.fetchall()
         return True, None
     except Exception as e:
@@ -36,27 +50,21 @@ def check_api(base):
 st.markdown("### 🔌 Status")
 c1, c2, c3 = st.columns([1,2,2])
 
-# DB status
 ok_db, info_db = check_db()
-c1.metric("Postgres", "OK" if ok_db else "Falhou", delta=None)
+c1.metric("Postgres", "OK" if ok_db else "Falhou")
 if not ok_db:
     c1.caption(str(info_db))
 
-# API health
 api_base = st.text_input("Base URL da API", value=DEFAULT_API, key="api_base_status")
 ok_api, info_api = check_api(api_base)
-c2.metric("API /health", "OK" if ok_api else "Falhou", delta=None)
+c2.metric("API /health", "OK" if ok_api else "Falhou")
 if ok_api and isinstance(info_api, dict):
     c2.caption(f"staging_table: {info_api.get('staging_table')} | fallback_delete: {info_api.get('fallback_delete')}")
 else:
     c2.caption(str(info_api))
 
-# DBT runner (exibido a partir do /health da API)
-if ok_api and isinstance(info_api, dict):
-    runner = info_api.get("dbt_runner_url")
-else:
-    runner = None
-c3.metric("DBT Runner URL", "configurado" if runner else "vazio", delta=None)
+runner = info_api.get("dbt_runner_url") if (ok_api and isinstance(info_api, dict)) else None
+c3.metric("DBT Runner URL", "configurado" if runner else "vazio")
 if runner:
     c3.caption(runner)
 
@@ -150,7 +158,7 @@ def parse_header_map_json(txt):
 with tab4:
     st.subheader("Importar por URL (CSV/CSV.GZ) – recomendado p/ arquivos grandes")
     st.caption("Use header_map se os nomes de colunas forem diferentes.")
-    api_base = st.text_input("Base URL da API", value=DEFAULT_API, key="api_base_url_url")
+    api_base_url = st.text_input("Base URL da API", value=DEFAULT_API, key="api_base_url_url")
     csv_url = st.text_input("URL do arquivo (csv ou csv.gz)", key="csv_url_field")
     header_map_txt = st.text_area("header_map (JSON opcional)", height=100, key="header_map_url")
     mode = st.radio("Modo de carga", ["Full replace (TRUNCATE/DELETE + INSERT)", "Append"], index=0, key="modo_url")
@@ -158,17 +166,19 @@ with tab4:
 
     if st.button("Importar do URL", key="btn_import_url"):
         hm = parse_header_map_json(header_map_txt)
-        if not api_base or not csv_url:
+        if not api_base_url or not csv_url:
             st.error("Preencha a API Base URL e a URL do arquivo.")
         else:
             try:
                 payload = {"url": csv_url, "mode": "full" if mode.startswith("Full") else "append", "date_format": date_fmt, "header_map": hm}
-                resp = requests.post(api_base.rstrip("/") + "/ingest/url", json=payload, timeout=900)
+                resp = requests.post(api_base_url.rstrip("/") + "/ingest/url", json=payload, timeout=900)
                 if resp.status_code == 200:
                     data = resp.json()
                     st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')} | Staging: {data.get('staging_table')}")
                     with st.expander("Preview (até 5 linhas)", expanded=False):
                         st.code("\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
+                elif resp.status_code == 404:
+                    show_404_help(api_base_url)
                 else:
                     st.error(f"API respondeu {resp.status_code}: {resp.text}")
             except Exception as e:
@@ -192,14 +202,27 @@ with tab5:
                 hm = parse_header_map_json(header_map_up)
                 if hm is not None:
                     data["header_map_json"] = json.dumps(hm, ensure_ascii=False)
-                resp = requests.post(api_base_up.rstrip("/") + "/ingest/upload", files=files, data=data, timeout=900)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')} | Staging: {data.get('staging_table')}")
-                    with st.expander("Preview (até 5 linhas)", expanded=False):
-                        st.code("\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
+                # Try main path then aliases
+                paths = ["/ingest/upload", "/upload", "/ingest/file", "/api/ingest/upload"]
+                last = None
+                for p in paths:
+                    resp = requests.post(api_base_up.rstrip("/") + p, files=files, data=data, timeout=900)
+                    last = resp
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        st.success(f"Ingest concluído ✅ Linhas ~{data.get('rows')} | Dialect: {data.get('dialect')} | Staging: {data.get('staging_table')} (via {p})")
+                        with st.expander("Preview (até 5 linhas)", expanded=False):
+                            st.code("\n".join([",".join(data.get("preview_header", []))] + [",".join(r) for r in data.get("preview_rows", [])]), language="csv")
+                        break
+                    elif resp.status_code == 404:
+                        continue
+                    else:
+                        st.error(f"API respondeu {resp.status_code} em {p}: {resp.text}")
+                        break
                 else:
-                    st.error(f"API respondeu {resp.status_code}: {resp.text}")
+                    show_404_help(api_base_up)
+                    if last is not None:
+                        st.caption(f"Última resposta: {last.status_code} {last.text[:200]}")
             except Exception as e:
                 st.exception(e)
 
