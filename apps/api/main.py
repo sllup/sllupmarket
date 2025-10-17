@@ -1,3 +1,4 @@
+
 import os, tempfile, csv, gzip, re, json
 from typing import Dict, Any, Optional, List, Tuple
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
@@ -267,7 +268,7 @@ def dbt_run():
                         resp["text"] = r.text[:5000]
                     return resp
                 else:
-                    tried.append(meta | {"body": (j if j else r.text[:500])})
+                    tried.append({**meta, "body": (j if j else r.text[:500])})
                     last = (r.status_code, j if j else r.text[:500], url, list(hdr.keys()))
             except Exception as e:
                 tried.append({"url": url, "headers": list(hdr.keys()), "error": str(e)})
