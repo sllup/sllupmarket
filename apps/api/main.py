@@ -235,23 +235,44 @@ def _dbt_env():
     env = os.environ.copy()
     return env
 
+
 @app.post("/dbt/run")
 def dbt_run_local():
+    # Força local runner
     if DBT_RUNNER_URL and DBT_RUNNER_URL.strip().upper() != "LOCAL":
         raise HTTPException(status_code=404, detail={"message": "Runner externo não suportado nesta build. Defina DBT_RUNNER_URL=LOCAL."})
     proj = os.path.join(ROOT_DIR, "dbt_project")
     if not os.path.isdir(proj):
         raise HTTPException(status_code=500, detail="Diretório dbt_project não encontrado no deploy")
     logs = []
-    for cmd in ["dbt deps", "dbt build --fail-fast"]:
+    # 1) Remover quaisquer arquivos legados com nome _placeholder.sql
+    removed = []
+    for dirpath, _, filenames in os.walk(os.path.join(proj, "models")):
+        for fn in filenames:
+            if fn == "_placeholder.sql":
+                try:
+                    os.remove(os.path.join(dirpath, fn))
+                    removed.append(os.path.join(dirpath, fn))
+                except Exception:
+                    pass
+    if removed:
+        logs.append(f"Removidos placeholders legados: {removed}")
+    # 2) dbt clean
+    for cmd in ["dbt clean", "dbt deps", "dbt parse", "dbt build --fail-fast"]:
         logs.append(f"$ {cmd}")
         try:
-            p = subprocess.Popen(shlex.split(cmd), cwd=proj, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=_dbt_env(), text=True)
+            import subprocess, shlex
+            p = subprocess.Popen(shlex.split(cmd), cwd=proj, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ.copy(), text=True)
             for line in p.stdout:
                 logs.append(line.rstrip())
             code = p.wait()
             if code != 0:
-                return {"ok": False, "step": cmd, "exit_code": code, "tail": "\n".join(logs[-400:])}
+                return {"ok": False, "step": cmd, "exit_code": code, "tail": "
+".join(logs[-400:])}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Falha ao executar '{cmd}': {e}")
+    return {"ok": True, "tail": "
+".join(logs[-400:])}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Falha ao executar '{cmd}': {e}")
     return {"ok": True, "tail": "\n".join(logs[-400:])}
